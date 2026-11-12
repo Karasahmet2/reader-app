@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1b1a18">
+  <meta name="description" content="A personal reader for web novel chapters.">
+  <title>Reader</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@300;400;500&display=swap">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app" aria-live="polite"></div>
+
+  <!-- Extra-dim layer for night reading (controlled from text settings) -->
+  <div id="dim-layer" aria-hidden="true"></div>
+
+  <!-- Hidden file picker used by the Import screen -->
+  <input id="file-input" type="file" accept=".txt,text/plain" multiple hidden>
+  <!-- Hidden folder picker: every .txt inside, subfolders too -->
+  <input id="folder-input" type="file" webkitdirectory multiple hidden>
+  <!-- Hidden image picker for custom series covers -->
+  <input id="image-input" type="file" accept="image/*" hidden>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
