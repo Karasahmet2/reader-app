@@ -17,6 +17,7 @@ import {
 } from './ui.js';
 import * as notes from './notes.js';
 import * as backup from './backup.js';
+import * as find from './find.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -202,14 +203,19 @@ async function route() {
     await fn();
   }
   document.body.classList.remove('controls-open');
-  const [, view, id, sub, subId] = (location.hash.replace(/^#/, '') || '/').split('/');
+  const parts = (location.hash.replace(/^#/, '') || '/').split('/');
+  const [, view, id, sub, subId] = parts;
+  // #/read/ID/find/PARA/NTH/WHOLE/TERM — open a chapter at a search result
+  const findJump = sub === 'find'
+    ? { para: Number(parts[4]), nth: Number(parts[5]), whole: parts[6] === '1', term: decodeURIComponent(parts.slice(7).join('/')) }
+    : null;
   const keepScroll = view === (route.lastView) && view !== 'read';
   const y = window.scrollY;
   route.lastView = view;
   try {
     await loadCovers();
     if (view === 'series' && id) await renderSeries(Number(id));
-    else if (view === 'read' && id) await renderReader(Number(id), sub === 'note' ? Number(subId) : null);
+    else if (view === 'read' && id) await renderReader(Number(id), sub === 'note' ? Number(subId) : null, findJump);
     else if (view === 'import') await renderImport();
     else if (view === 'notes') await notes.renderNotes(app, nav('notes'), s => cover(s, 'xs'));
     else if (view === 'settings') await renderSettings();
@@ -471,6 +477,8 @@ async function renderSeries(id) {
     return `<a class="chapter-row${isCurrent ? ' is-current' : ''}${c.read && !isCurrent ? ' is-read' : ''}" href="#/read/${c.id}" data-num="${c.number}">
       <span class="num">${fmtNum(c.number)}</span>
       <span class="title">${esc(c.title || `Chapter ${fmtNum(c.number)}`)}</span>
+      ${c.rating ? `<span class="ch-rating" aria-label="Rated ${c.rating} of 9">★ ${c.rating}</span>` : ''}
+      ${c.thoughts ? `<span class="ch-thoughts" role="img" aria-label="Has your thoughts">${I.noteSm}</span>` : ''}
       ${state}
     </a>`;
   }).join('');
@@ -482,7 +490,12 @@ async function renderSeries(id) {
     cta = `<a class="btn btn-accent" href="#/read/${target.chapter.id}">${I.play} ${label} · Ch. ${fmtNum(target.chapter.number)}${pct}</a>`;
   }
 
+  const rated = chapters.filter(c => c.rating);
   const meta = [plural(chapters.length, 'chapter')];
+  if (rated.length) {
+    const avg = rated.reduce((sum, c) => sum + c.rating, 0) / rated.length;
+    meta.push(`★ ${avg.toFixed(1)} average`);
+  }
   if (unread && unread !== chapters.length) meta.push(`${unread} unread`);
   if (fresh) meta.push(`${fresh} new`);
 
@@ -728,7 +741,7 @@ function openJumpSheet() {
 
 /* ------------------------------------------------------------------ reader */
 
-async function renderReader(id, jumpNoteId = null) {
+async function renderReader(id, jumpNoteId = null, findJump = null) {
   const chapter = await db.getChapter(id);
   if (!chapter) throw new Error('This chapter no longer exists.');
   const [series, paragraphs, siblings, saved] = await Promise.all([
@@ -746,8 +759,21 @@ async function renderReader(id, jumpNoteId = null) {
     ? `<p class="ch-label">Chapter ${n}</p><h1 class="ch-title">${esc(chapter.title)}</h1>`
     : `<h1 class="ch-title">Chapter ${n}</h1>`;
 
+  const stars = Array.from({ length: 9 }, (_, i) => i + 1).map(k => `<button type="button" role="radio" data-star="${k}"
+      class="${k <= (chapter.rating || 0) ? 'on' : ''}" aria-checked="${chapter.rating === k}" aria-label="${k} star${k === 1 ? '' : 's'}">${I.star}</button>`).join('');
+  const reflect = `
+      <div class="rate-card">
+        <div class="rate-head"><span>How was this chapter?</span><b id="rate-val">${chapter.rating ? `${chapter.rating} / 9` : 'Not rated'}</b></div>
+        <div class="stars" role="radiogroup" aria-label="Rate this chapter from 1 to 9" data-rating="${chapter.rating || 0}">${stars}</div>
+      </div>
+      <label class="thoughts-card">
+        <span class="th-head"><span>Your thoughts</span><small id="th-state">${chapter.thoughts ? 'Saved' : 'Saved automatically'}</small></span>
+        <textarea id="thoughts" class="text-area" rows="4" placeholder="How did this chapter make you feel? What stood out?">${esc(chapter.thoughts || '')}</textarea>
+      </label>`;
+
   const end = next ? `
       <div class="done"><strong>Chapter ${n} finished</strong><span id="read-note">${chapter.read ? 'Marked as read' : ''}</span></div>
+      ${reflect}
       <a class="next-card" href="#/read/${next.id}">
         <span class="txt"><small>Up next</small><b>Chapter ${fmtNum(next.number)}${next.title ? ': ' + esc(next.title) : ''}</b></span>
         <span class="round-go">${I.next}</span>
@@ -757,6 +783,7 @@ async function renderReader(id, jumpNoteId = null) {
         <a class="btn btn-outline" href="#/">${I.library} Library</a>
       </div>` : `
       <div class="done"><strong>You’re caught up</strong><span id="read-note">Import Chapter ${fmtNum(chapter.number + 1)} when it comes out.</span></div>
+      ${reflect}
       <div class="two-btns">
         <a class="btn btn-outline" href="#/import">${I.import} Import</a>
         <a class="btn btn-outline" href="#/">${I.library} Library</a>
@@ -826,7 +853,50 @@ async function renderReader(id, jumpNoteId = null) {
     updateUI();
     marks.forEach(m => { m.classList.add('flash'); setTimeout(() => m.classList.remove('flash'), 1800); });
   }
-  const noteCtx = { chapter, series, where, onChanged: refreshNotes, onJump: jumpTo };
+  /** Jump to the nth search match in a paragraph of this chapter. */
+  function jumpToMatch(para, nth, term, whole) {
+    if (!find.flashMatch(paras[para], nth, term, whole)) {
+      toast('Couldn’t find that spot in this chapter');
+      return;
+    }
+    measure();
+    updateUI();
+  }
+  const noteCtx = { chapter, series, where, onChanged: refreshNotes, onJump: jumpTo, onFindJump: jumpToMatch };
+
+  // ---- rating & thoughts (end of chapter) ----
+  const starsEl = readerEl.querySelector('.stars');
+  starsEl.addEventListener('click', async e => {
+    const b = e.target.closest('[data-star]');
+    if (!b) return;
+    const k = Number(b.dataset.star);
+    chapter.rating = chapter.rating === k ? 0 : k; // tap the same star again to clear
+    await db.putChapter(chapter);
+    starsEl.dataset.rating = String(chapter.rating);
+    starsEl.querySelectorAll('[data-star]').forEach(x => {
+      x.setAttribute('aria-checked', String(Number(x.dataset.star) === chapter.rating));
+      x.classList.toggle('on', Number(x.dataset.star) <= chapter.rating);
+    });
+    readerEl.querySelector('#rate-val').textContent = chapter.rating ? `${chapter.rating} / 9` : 'Not rated';
+  });
+  const thoughtsEl = readerEl.querySelector('#thoughts');
+  const thState = readerEl.querySelector('#th-state');
+  let thTimer = null;
+  async function saveThoughts() {
+    clearTimeout(thTimer);
+    thTimer = null;
+    const text = thoughtsEl.value.trim();
+    if (text === (chapter.thoughts || '')) return;
+    chapter.thoughts = text;
+    await db.putChapter(chapter);
+    thState.textContent = 'Saved';
+  }
+  thoughtsEl.addEventListener('input', () => {
+    thState.textContent = 'Typing…';
+    clearTimeout(thTimer);
+    thTimer = setTimeout(saveThoughts, 700);
+  });
+  thoughtsEl.addEventListener('blur', saveThoughts);
 
   let percent = 0;
   let markedRead = !!chapter.read;
@@ -914,7 +984,7 @@ async function renderReader(id, jumpNoteId = null) {
 
   // Tap the page to show or hide the controls.
   readerEl.addEventListener('click', e => {
-    if (e.target.closest('a, button, input, label')) return;
+    if (e.target.closest('a, button, input, textarea, label, .rate-card')) return;
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return;
     const mark = e.target.closest('mark.note-mark');
@@ -955,6 +1025,7 @@ async function renderReader(id, jumpNoteId = null) {
   if (document.fonts?.ready) await document.fonts.ready;
   await refreshNotes();
   if (jumpNoteId) jumpTo(jumpNoteId);
+  else if (findJump) jumpToMatch(findJump.para, findJump.nth, findJump.term, findJump.whole);
   else if (saved) restore(saved);
   else { window.scrollTo(0, 0); measure(); updateUI(); }
 
@@ -966,6 +1037,8 @@ async function renderReader(id, jumpNoteId = null) {
     } else if (action === 'highlight') {
       await notes.saveHighlight(draft);
       refreshNotes();
+    } else if (action === 'find') {
+      find.openFind({ term: sel.quote.split('\n')[0], chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch });
     } else if (action === 'copy') {
       try { await navigator.clipboard.writeText(sel.quote); toast('Copied'); } catch { toast('Couldn’t copy'); }
     }
@@ -981,6 +1054,7 @@ async function renderReader(id, jumpNoteId = null) {
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pagehide', save);
     teardownSelection();
+    await saveThoughts();
     activeReader = null;
     await unlockScreen();
     await save();

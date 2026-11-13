@@ -68,6 +68,17 @@ Plain HTML, CSS and JavaScript — no build step.
 - **★ favorite themes**: the reader's theme button cycles only through these.
 - The **Note · Highlight · Copy** bar appears right under the selected text.
 
+## Update 3
+
+- **19 tag colors** (the 12 accents + Yellow, Mint, Magenta, Brown, Slate, Silver, Olive).
+  Tap a tag's color dot in the tag manager to pick from all 19; new tags start with an unused color.
+- **Find uses**: in the selection bar (Note · Highlight · Find · Copy) and on note cards.
+  Shows every use with its sentence, in this chapter / this series / all series, with an
+  editable search term and a "Whole word" switch. Tap a result to jump to that exact spot.
+- **Chapter rating** (1–9 stars) and **your thoughts** at the end of every chapter,
+  saved automatically. The series page shows the average rating, and each chapter's
+  stars and a note icon when you wrote thoughts.
+
 ## Project structure
 
 ```
@@ -80,6 +91,7 @@ js/settings.js        themes, accents, reading settings
 js/notes.js           notes, highlights, tags, Notes tab
 js/ui.js              shared helpers: icons, toasts, bottom sheets
 js/backup.js          backup file: create, check, restore
+js/find.js            Find uses: search chapters, jump to results
 sw.js                 offline support (bump VERSION after changes)
 manifest.webmanifest  app name and icons for "Add to Home screen"
 icons/                app icons

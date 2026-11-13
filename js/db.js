@@ -301,3 +301,16 @@ export const counts = () => withTx(['series', 'chapters', 'notes'], 'readonly', 
   chapters: await req(s.chapters.count()),
   notes: await req(s.notes.count()),
 }));
+
+// ---------- Search ----------
+/** Call fn(chapterId, paragraphs) for every stored chapter text, one at a time (low memory). */
+export const forEachText = fn => withTx(['texts'], 'readonly', s => new Promise((resolve, reject) => {
+  const r = s.texts.openCursor();
+  r.onsuccess = () => {
+    const cur = r.result;
+    if (!cur) { resolve(); return; }
+    fn(cur.value.chapterId, cur.value.paragraphs);
+    cur.continue();
+  };
+  r.onerror = () => reject(r.error);
+}));

@@ -6,13 +6,29 @@
 //  • Tag manager: add, rename, recolor and delete tags.
 
 import * as db from './db.js';
-import { ACCENTS } from './settings.js';
+import { TAG_PALETTE } from './settings.js';
 import { esc, fmtNum, plural, short, I, toast, openSheet, closeOverlay } from './ui.js';
+import { openFind } from './find.js';
 
-export const TAG_COLORS = ['blue', 'green', 'purple', 'rose', 'amber', 'teal'];
+export const TAG_COLORS = Object.keys(TAG_PALETTE); // 19 colors
+
+/** A color for a new tag: the first one no tag uses yet, otherwise the least used. */
+export function nextTagColor(tags) {
+  const used = new Map(TAG_COLORS.map(c => [c, 0]));
+  for (const t of tags) if (used.has(t.color)) used.set(t.color, used.get(t.color) + 1);
+  return [...used.entries()].sort((a, b) => a[1] - b[1])[0][0];
+}
+
+/** The 19-color picker. `extra` adds attributes to each button (e.g. which tag it's for). */
+function paletteHtml(selected, extra = '') {
+  return `<div class="palette" role="group" aria-label="Tag color">
+    ${TAG_COLORS.map(c => `<button type="button" data-color="${c}" ${extra} aria-label="${TAG_PALETTE[c].label}" aria-pressed="${c === selected}">
+      <span style="background:${tagColor(c)}"></span></button>`).join('')}
+  </div>`;
+}
 
 const isPaper = () => document.documentElement.dataset.light === 'true';
-const accentOf = c => ACCENTS[c] || ACCENTS.amber;
+const accentOf = c => TAG_PALETTE[c] || TAG_PALETTE.amber;
 export const tagColor = c => (isPaper() ? accentOf(c).paper : accentOf(c).dark);
 export const tagBg = c => (isPaper() ? accentOf(c).selPaper : accentOf(c).selDark);
 
@@ -173,7 +189,8 @@ export function setupSelectionBar(textEl, paras, onAction) {
   bar.innerHTML = `
     <button type="button" class="sel-main" data-sel="note">${I.note}Note</button>
     <button type="button" data-sel="highlight">${I.highlight}Highlight</button>
-    <button type="button" data-sel="copy">${I.copy}Copy</button>`;
+    <button type="button" data-sel="find">${I.searchSm}Find</button>
+    <button type="button" data-sel="copy" aria-label="Copy">${I.copy}</button>`;
   document.body.append(bar);
 
   let last = null;
@@ -268,7 +285,7 @@ export function setupSelectionBar(textEl, paras, onAction) {
 export async function openNoteEditor({ note, where, onSaved }) {
   let tags = await db.getAllTags();
   const selected = new Set(note.tagIds || []);
-  let newColor = TAG_COLORS[tags.length % TAG_COLORS.length];
+  let newColor = nextTagColor(tags);
   const isNew = note.id == null;
 
   const chipsHtml = () => `
@@ -280,10 +297,7 @@ export async function openNoteEditor({ note, where, onSaved }) {
   const newTagHtml = () => `
     <div class="new-tag" hidden>
       <input class="text-input" id="new-tag-name" type="text" placeholder="Tag name" maxlength="30" autocomplete="off">
-      <div class="mini-swatches" role="group" aria-label="Tag color">
-        ${TAG_COLORS.map(c => `<button type="button" data-color="${c}" aria-label="${ACCENTS[c].label}" aria-pressed="${c === newColor}">
-          <span style="background:${tagColor(c)}"></span></button>`).join('')}
-      </div>
+      ${paletteHtml(newColor)}
       <button type="button" class="btn btn-accent" data-addtag>Add tag</button>
     </div>`;
 
@@ -399,7 +413,7 @@ function noteCardHtml(note, tagsById, { link = null, where = '', chapter = '', i
 
 /**
  * The card shown when you tap marked text in the reader.
- * ctx: { where, onChanged }
+ * ctx: { where, onChanged, onFindJump (reader only), inNotesTab }
  */
 export async function openNoteCard(noteId, ctx) {
   const [note, tags] = await Promise.all([db.getNote(noteId), db.getAllTags()]);
@@ -409,7 +423,7 @@ export async function openNoteCard(noteId, ctx) {
     ${noteCardHtml(note, tagsById, { isStatic: true, where: ctx.where })}
     <div class="card-actions">
       <button type="button" class="btn" data-nc="edit">${I.pencilSm} Edit</button>
-      ${note.quote && !ctx.inNotesTab ? `<button type="button" class="btn" data-nc="find">${I.searchSm} Find in notes</button>` : ''}
+      ${note.quote ? `<button type="button" class="btn" data-nc="find">${I.searchSm} Find uses</button>` : ''}
       <button type="button" class="btn btn-ghost-danger" data-nc="delete" aria-label="Delete note">${I.trashSm}</button>
     </div>`, sheet => {
     sheet.addEventListener('click', async e => {
@@ -418,10 +432,12 @@ export async function openNoteCard(noteId, ctx) {
       if (b.dataset.nc === 'edit') {
         openNoteEditor({ note, where: ctx.where, onSaved: ctx.onChanged });
       } else if (b.dataset.nc === 'find') {
-        notesState.query = note.quote.length > 40 ? note.quote.slice(0, 40) : note.quote;
-        notesState.searchOpen = true;
-        notesState.filter = 'all';
-        closeOverlay({ navTo: '#/notes' });
+        openFind({
+          term: note.quote.split('\n')[0],
+          chapterId: note.chapterId,
+          seriesId: note.seriesId,
+          onJumpHere: ctx.onFindJump || null,
+        });
       } else if (b.dataset.nc === 'delete') {
         if (!b.classList.contains('confirm')) {
           b.classList.add('confirm');
@@ -656,20 +672,24 @@ export async function openTagManager(onChanged) {
   const allNotes = await db.getAllNotes();
   const counts = new Map();
   for (const n of allNotes) for (const id of n.tagIds || []) counts.set(id, (counts.get(id) || 0) + 1);
+  let openId = null; // tag whose color palette is open
 
   const rowsHtml = () => tags.map(t => `
-    <div class="tag-row" data-row="${t.id}">
-      <button type="button" class="tag-color" data-cycle="${t.id}" aria-label="Change color of ${esc(t.name)}"
-        style="background:${tagColor(t.color)}"></button>
-      <label class="tag-name"><span class="visually-hidden">Tag name</span>
-        <input type="text" value="${esc(t.name)}" data-rename="${t.id}" maxlength="30" autocomplete="off"></label>
-      <span class="tag-count">${counts.get(t.id) || 0}</span>
-      <button type="button" class="icon-btn tag-del" data-del="${t.id}" aria-label="Delete ${esc(t.name)}">${I.trashSm}</button>
+    <div class="tag-item">
+      <div class="tag-row" data-row="${t.id}">
+        <button type="button" class="tag-color" data-pick="${t.id}" aria-expanded="${openId === t.id}"
+          aria-label="Change color of ${esc(t.name)}" style="background:${tagColor(t.color)}"></button>
+        <label class="tag-name"><span class="visually-hidden">Tag name</span>
+          <input type="text" value="${esc(t.name)}" data-rename="${t.id}" maxlength="30" autocomplete="off"></label>
+        <span class="tag-count">${counts.get(t.id) || 0}</span>
+        <button type="button" class="icon-btn tag-del" data-del="${t.id}" aria-label="Delete ${esc(t.name)}">${I.trashSm}</button>
+      </div>
+      ${openId === t.id ? paletteHtml(t.color, `data-for="${t.id}"`) : ''}
     </div>`).join('');
 
   openSheet(`
     <h2>Tags</h2>
-    <p class="hint">Tap a color to change it. Deleting a tag keeps the notes; they just lose that tag.</p>
+    <p class="hint">Tap a color dot to choose from 19 colors. Deleting a tag keeps the notes; they just lose that tag.</p>
     <div class="tag-rows">${rowsHtml()}</div>
     <div class="tag-row is-add">
       <span class="tag-color" style="background:var(--surface-3)"></span>
@@ -685,7 +705,7 @@ export async function openTagManager(onChanged) {
       const name = input.value.replace(/\s+/g, ' ').trim();
       if (!name) { input.focus(); return; }
       if (tags.some(t => t.name.toLowerCase() === name.toLowerCase())) { toast('That tag already exists'); return; }
-      const tag = await db.addTag(name, TAG_COLORS[tags.length % TAG_COLORS.length]);
+      const tag = await db.addTag(name, nextTagColor(tags));
       tags = [...tags, tag];
       input.value = '';
       redraw();
@@ -693,12 +713,20 @@ export async function openTagManager(onChanged) {
     };
 
     sheet.addEventListener('click', async e => {
-      const cyc = e.target.closest('[data-cycle]');
-      if (cyc) {
-        const t = tags.find(x => x.id === Number(cyc.dataset.cycle));
-        t.color = TAG_COLORS[(TAG_COLORS.indexOf(t.color) + 1) % TAG_COLORS.length];
+      const pick = e.target.closest('[data-pick]');
+      if (pick) {
+        const id = Number(pick.dataset.pick);
+        openId = openId === id ? null : id;
+        redraw();
+        return;
+      }
+      const sw = e.target.closest('[data-color][data-for]');
+      if (sw) {
+        const t = tags.find(x => x.id === Number(sw.dataset.for));
+        t.color = sw.dataset.color;
         await db.updateTag(t.id, { color: t.color });
-        cyc.style.background = tagColor(t.color);
+        openId = null;
+        redraw();
         onChanged?.();
         return;
       }

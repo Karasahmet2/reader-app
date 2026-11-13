@@ -31,6 +31,18 @@ export const ACCENTS = {
   lime:   { label: 'Lime',   dark: '#b5c46f', paper: '#5a6a14', selDark: '#3a4026', selPaper: '#dbe2b3' },
 };
 
+// Tag colors: the 12 accents plus 7 more, so many tags can each have their own color.
+export const TAG_PALETTE = {
+  ...ACCENTS,
+  yellow:  { label: 'Yellow',  dark: '#e3cf6a', paper: '#7a6500', selDark: '#4a4426', selPaper: '#ece2b0' },
+  mint:    { label: 'Mint',    dark: '#7fd1b0', paper: '#1f7556', selDark: '#24443a', selPaper: '#bfe5d6' },
+  magenta: { label: 'Magenta', dark: '#d46fd8', paper: '#8a2a8e', selDark: '#47284a', selPaper: '#ecc6ee' },
+  brown:   { label: 'Brown',   dark: '#b88a63', paper: '#74482a', selDark: '#3f3026', selPaper: '#e2cdbb' },
+  slate:   { label: 'Slate',   dark: '#8d9bb0', paper: '#45536b', selDark: '#2e3440', selPaper: '#cfd6e2' },
+  silver:  { label: 'Silver',  dark: '#c9ccd1', paper: '#5f636a', selDark: '#3a3b3e', selPaper: '#dcdee2' },
+  olive:   { label: 'Olive',   dark: '#a19a5a', paper: '#5c561e', selDark: '#3a3824', selPaper: '#dedbb8' },
+};
+
 export const SPACING = { tight: 1.55, normal: 1.75, relaxed: 1.95 };
 export const MARGINS = { narrow: 16, medium: 26, wide: 38 };
 
