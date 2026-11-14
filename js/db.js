@@ -8,6 +8,7 @@
 //   covers    { seriesId, blob }                                        <- custom cover images (v2)
 //   tags      { id, name, color, order }                                <- your note tags (v3)
 //   notes     { id, seriesId, chapterId, sp, so, ep, eo, quote, text, tagIds: [], createdAt, updatedAt } (v3)
+//   sounds    { id, name, blob, duration, addedAt }                     <- your own background sounds (v4, not in backups)
 //
 // A note points at text with paragraph + character offsets (sp/so = start, ep/eo = end).
 // The quoted text is stored too, so a note can find its place again if the chapter is re-imported.
@@ -18,7 +19,7 @@
 import { nameKey } from './parser.js';
 
 const DB_NAME = 'reader-app';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 let dbPromise = null;
 
 function req(r) {
@@ -51,11 +52,14 @@ export function openDB() {
       }
       if (event.oldVersion < 3) {
         const tags = db.createObjectStore('tags', { keyPath: 'id', autoIncrement: true });
-        [['Vocabulary', 'blue'], ['Sayings', 'green'], ['Characters', 'purple'], ['Plot', 'rose']]
+        [['Vocabulary', 'blue'], ['Sayings', 'green'], ['Characters', 'purple'], ['Plot', 'red']]
           .forEach(([name, color], order) => tags.add({ name, color, order }));
         const notes = db.createObjectStore('notes', { keyPath: 'id', autoIncrement: true });
         notes.createIndex('chapterId', 'chapterId');
         notes.createIndex('seriesId', 'seriesId');
+      }
+      if (event.oldVersion < 4) {
+        db.createObjectStore('sounds', { keyPath: 'id', autoIncrement: true });
       }
     };
     open.onsuccess = () => resolve(open.result);
@@ -173,6 +177,12 @@ export const getAllCovers = () => withTx(['covers'], 'readonly', s => req(s.cove
 export const putCover = (seriesId, blob) =>
   withTx(['covers'], 'readwrite', s => req(s.covers.put({ seriesId, blob })));
 export const deleteCover = seriesId => withTx(['covers'], 'readwrite', s => req(s.covers.delete(seriesId)));
+
+// ---------- Your own background sounds ----------
+export const getAllSounds = () => withTx(['sounds'], 'readonly', s => req(s.sounds.getAll()));
+export const getSound = id => withTx(['sounds'], 'readonly', s => req(s.sounds.get(id)));
+export const addSound = obj => withTx(['sounds'], 'readwrite', s => req(s.sounds.add(obj)));
+export const deleteSound = id => withTx(['sounds'], 'readwrite', s => req(s.sounds.delete(id)));
 
 // ---------- Chapters ----------
 export const getAllChapters = () => withTx(['chapters'], 'readonly', s => req(s.chapters.getAll()));

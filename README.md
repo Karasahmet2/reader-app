@@ -79,19 +79,36 @@ Plain HTML, CSS and JavaScript — no build step.
   saved automatically. The series page shows the average rating, and each chapter's
   stars and a note icon when you wrote thoughts.
 
+## Update 4
+
+- **Background sounds**: tap the screen while reading → headphones icon (top right).
+  6 built-in sounds made by the app itself (Ocean waves, Rain, River, Wind, Fireplace,
+  Night crickets), plus **your own** audio files from the phone (birds, forest…).
+  Play several at once with a volume for each; all loop without a gap and keep playing
+  with the screen off (pause/play from the lock screen). **Sleep timer** 15 / 30 / 60 min,
+  fading out over the last 30 seconds. Your own sounds stay on the phone and are not in backups.
+- **Library cards** show chapters read out of the total and the series' average rating:
+  "40 / 120 read · ★ 6.8".
+- **Notes tab**: tapping a note opens it with **Go to text · Edit · Find uses · Copy · Delete**,
+  so you can edit without opening the chapter.
+- **12 tag colors** that are clearly different from each other (instead of 19, several of
+  which looked alike). Existing tags move to the closest new color automatically, each
+  tag getting its own color while there are free ones.
+
 ## Project structure
 
 ```
 index.html            the single page
 css/style.css         all styles (themes are CSS variables)
 js/app.js             screens, navigation, reader behavior
-js/db.js              IndexedDB storage (series, chapters, texts, progress, covers, tags, notes)
+js/db.js              IndexedDB storage (series, chapters, texts, progress, covers, tags, notes, sounds)
 js/parser.js          reads .txt files (header, paragraphs, encoding)
 js/settings.js        themes, accents, reading settings
 js/notes.js           notes, highlights, tags, Notes tab
 js/ui.js              shared helpers: icons, toasts, bottom sheets
 js/backup.js          backup file: create, check, restore
 js/find.js            Find uses: search chapters, jump to results
+js/sounds.js          background sounds: built-in sounds, your own sounds, sleep timer
 sw.js                 offline support (bump VERSION after changes)
 manifest.webmanifest  app name and icons for "Add to Home screen"
 icons/                app icons
@@ -127,7 +144,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v7` → `reader-v8`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v9` → `reader-v10`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

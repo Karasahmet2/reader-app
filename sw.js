@@ -8,9 +8,9 @@
 //    changed, the new version is downloaded in the background and used the NEXT
 //    time you open the app.
 //
-// ► After changing ANY file, bump VERSION (reader-v7, reader-v8, …) so phones update.
+// ► After changing ANY file, bump VERSION (reader-v8, reader-v9, …) so phones update.
 
-const VERSION = 'reader-v8';
+const VERSION = 'reader-v9';
 const APP_FILES = [
   './',
   './index.html',
@@ -23,6 +23,7 @@ const APP_FILES = [
   './js/notes.js',
   './js/backup.js',
   './js/find.js',
+  './js/sounds.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',

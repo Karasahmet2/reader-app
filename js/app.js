@@ -18,6 +18,7 @@ import {
 import * as notes from './notes.js';
 import * as backup from './backup.js';
 import * as find from './find.js';
+import * as sounds from './sounds.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -250,6 +251,8 @@ async function loadGroups() {
     g.chapters.sort((a, b) => a.number - b.number);
     g.unread = g.chapters.filter(c => !c.read).length;
     g.readCount = g.chapters.length - g.unread;
+    const rated = g.chapters.filter(c => c.rating);
+    g.avgRating = rated.length ? rated.reduce((sum, c) => sum + c.rating, 0) / rated.length : 0;
   }
   return [...groups.values()];
 }
@@ -374,6 +377,8 @@ function drawLibraryList() {
 }
 
 /** One library card: cover, name, where you are, and a resume button. */
+const count = n => n.toLocaleString('en-US');
+
 function seriesCard(g) {
   const s = g.series;
   const status = statusOf(s);
@@ -385,7 +390,7 @@ function seriesCard(g) {
   let button;
 
   if (status === 'finished') {
-    sub = `Finished · ${plural(g.chapters.length, 'chapter')}`;
+    sub = 'Finished';
     button = `<span class="resume is-done" aria-hidden="true">${I.check}</span>`;
   } else if (!g.unread && g.chapters.length) {
     sub = status === 'waiting' ? 'Waiting · caught up' : 'Caught up';
@@ -396,7 +401,7 @@ function seriesCard(g) {
     progress = `<span class="mini-progress" aria-hidden="true"><span style="width:${pct}%"></span></span>`;
     button = `<a class="resume" href="#/read/${t.chapter.id}" aria-label="Continue ${esc(s.name)}, chapter ${fmtNum(t.chapter.number)}">${I.play}</a>`;
   } else {
-    sub = `Not started · ${plural(g.chapters.length, 'chapter')}`;
+    sub = 'Not started';
     button = firstUnread
       ? `<a class="resume is-start" href="#/read/${firstUnread.id}" aria-label="Start reading ${esc(s.name)}">${I.play}</a>`
       : '';
@@ -408,6 +413,8 @@ function seriesCard(g) {
       <span class="series-card-info">
         <span class="series-card-name">${esc(s.name)}</span>
         <span class="series-card-sub">${sub}</span>
+        <span class="series-card-stats">${count(g.readCount)} / ${count(g.chapters.length)} read · ${g.avgRating
+          ? `<b aria-label="average rating">★</b> ${g.avgRating.toFixed(1)}` : 'no rating yet'}</span>
         ${progress}
       </span>
     </a>
@@ -797,6 +804,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     <header class="reader-top">
       <a class="icon-btn" href="#/series/${series.id}" aria-label="Back to series">${I.back}</a>
       <div class="titles"><b>${esc(series.name)}</b><span>Ch. ${n}${chapter.title ? ' · ' + esc(chapter.title) : ''}</span></div>
+      <button type="button" class="icon-btn snd-btn${sounds.isPlaying() ? ' is-playing' : ''}" data-action="open-sounds" aria-label="Background sounds">${sounds.HEADPHONES}</button>
       <a class="icon-btn" href="#/series/${series.id}" aria-label="Chapter list">${I.list}</a>
     </header>
 
@@ -1699,6 +1707,9 @@ document.addEventListener('click', e => {
     case 'open-settings':
       openSheet(settingsSheetHtml(), mountSettings);
       break;
+    case 'open-sounds':
+      sounds.openSoundsPanel();
+      break;
     case 'cycle-theme': {
       // Cycle through your ★ favorite themes (all themes if none are starred).
       const list = favThemes().length ? favThemes() : THEMES.map(t => t.id);
@@ -1772,4 +1783,9 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 const pending = sessionStorage.getItem('reader-toast');
 if (pending) { sessionStorage.removeItem('reader-toast'); setTimeout(() => toast(pending), 400); }
 
-route();
+// The headphones button in the reader shows a dot while sounds play.
+sounds.onChange(() => document.querySelectorAll('.snd-btn')
+  .forEach(b => b.classList.toggle('is-playing', sounds.isPlaying())));
+
+// Update 4: tags still using an old color move to the new 12, then the app starts.
+notes.migrateTagColors().catch(err => console.warn('Tag colors not updated', err)).finally(route);

@@ -6,11 +6,11 @@
 //  • Tag manager: add, rename, recolor and delete tags.
 
 import * as db from './db.js';
-import { TAG_PALETTE } from './settings.js';
+import { TAG_PALETTE, OLD_TAG_COLORS } from './settings.js';
 import { esc, fmtNum, plural, short, I, toast, openSheet, closeOverlay } from './ui.js';
 import { openFind } from './find.js';
 
-export const TAG_COLORS = Object.keys(TAG_PALETTE); // 19 colors
+export const TAG_COLORS = Object.keys(TAG_PALETTE); // 12 colors
 
 /** A color for a new tag: the first one no tag uses yet, otherwise the least used. */
 export function nextTagColor(tags) {
@@ -19,7 +19,7 @@ export function nextTagColor(tags) {
   return [...used.entries()].sort((a, b) => a[1] - b[1])[0][0];
 }
 
-/** The 19-color picker. `extra` adds attributes to each button (e.g. which tag it's for). */
+/** The 12-color picker. `extra` adds attributes to each button (e.g. which tag it's for). */
 function paletteHtml(selected, extra = '') {
   return `<div class="palette" role="group" aria-label="Tag color">
     ${TAG_COLORS.map(c => `<button type="button" data-color="${c}" ${extra} aria-label="${TAG_PALETTE[c].label}" aria-pressed="${c === selected}">
@@ -28,9 +28,36 @@ function paletteHtml(selected, extra = '') {
 }
 
 const isPaper = () => document.documentElement.dataset.light === 'true';
-const accentOf = c => TAG_PALETTE[c] || TAG_PALETTE.amber;
+const accentOf = c => TAG_PALETTE[c] || TAG_PALETTE[OLD_TAG_COLORS[c]] || TAG_PALETTE.silver;
 export const tagColor = c => (isPaper() ? accentOf(c).paper : accentOf(c).dark);
 export const tagBg = c => (isPaper() ? accentOf(c).selPaper : accentOf(c).selDark);
+
+
+/** Update 4: tags that still use one of the old 19 colors move to the new 12.
+ *  Each tag gets its own color while there are free ones: the closest new color,
+ *  or the nearest free one around the color wheel if that's taken. */
+const RING = ['red', 'orange', 'yellow', 'green', 'teal', 'sky', 'blue', 'purple', 'magenta', 'pink'];
+export async function migrateTagColors() {
+  const tags = (await db.getAllTags()).sort((a, b) => (a.order ?? a.id) - (b.order ?? b.id));
+  if (tags.every(t => TAG_PALETTE[t.color])) return 0;
+  const used = new Set(tags.filter(t => TAG_PALETTE[t.color]).map(t => t.color));
+  let changed = 0;
+  for (const t of tags) {
+    if (TAG_PALETTE[t.color]) continue;
+    const want = OLD_TAG_COLORS[t.color] || 'silver';
+    let pick = want;
+    if (used.has(want)) {
+      const i = RING.indexOf(want);
+      const near = i < 0 ? [] : RING.map((c, j) => [c, Math.min(Math.abs(j - i), RING.length - Math.abs(j - i))])
+        .filter(([c]) => !used.has(c)).sort((a, b) => a[1] - b[1]).map(([c]) => c);
+      pick = near[0] || TAG_COLORS.find(c => !used.has(c)) || want;
+    }
+    used.add(pick);
+    await db.updateTag(t.id, { color: pick });
+    changed++;
+  }
+  return changed;
+}
 
 const byId = list => new Map(list.map(x => [x.id, x]));
 
@@ -419,29 +446,49 @@ export async function openNoteCard(noteId, ctx) {
   const [note, tags] = await Promise.all([db.getNote(noteId), db.getAllTags()]);
   if (!note) return;
   const tagsById = byId(tags);
+  // From the Notes tab there's a "Go to" button; in the reader you're already there.
+  const goTo = ctx.inNotesTab
+    ? `<button type="button" class="nc-big is-accent" data-nc="goto">${I.bookOpen}${note.quote ? 'Go to text' : 'Go to chapter'}</button>`
+    : '';
+  const big = [
+    goTo,
+    `<button type="button" class="nc-big" data-nc="edit">${I.pencil}Edit</button>`,
+    note.quote ? `<button type="button" class="nc-big" data-nc="find">${I.search}Find uses</button>` : '',
+  ].filter(Boolean);
   openSheet(`
     ${noteCardHtml(note, tagsById, { isStatic: true, where: ctx.where })}
+    <div class="nc-grid" style="--n:${big.length}">${big.join('')}</div>
     <div class="card-actions">
-      <button type="button" class="btn" data-nc="edit">${I.pencilSm} Edit</button>
-      ${note.quote ? `<button type="button" class="btn" data-nc="find">${I.searchSm} Find uses</button>` : ''}
-      <button type="button" class="btn btn-ghost-danger" data-nc="delete" aria-label="Delete note">${I.trashSm}</button>
+      <button type="button" class="btn btn-outline" data-nc="copy">${I.copy} Copy</button>
+      <button type="button" class="btn btn-outline is-danger" data-nc="delete">${I.trashSm} Delete</button>
     </div>`, sheet => {
     sheet.addEventListener('click', async e => {
       const b = e.target.closest('[data-nc]');
       if (!b) return;
-      if (b.dataset.nc === 'edit') {
+      const act = b.dataset.nc;
+      if (act === 'goto') {
+        closeOverlay({ navTo: note.quote ? `#/read/${note.chapterId}/note/${note.id}` : `#/read/${note.chapterId}` });
+      } else if (act === 'edit') {
         openNoteEditor({ note, where: ctx.where, onSaved: ctx.onChanged });
-      } else if (b.dataset.nc === 'find') {
+      } else if (act === 'find') {
         openFind({
           term: note.quote.split('\n')[0],
           chapterId: note.chapterId,
           seriesId: note.seriesId,
           onJumpHere: ctx.onFindJump || null,
         });
-      } else if (b.dataset.nc === 'delete') {
+      } else if (act === 'copy') {
+        const txt = [note.quote, note.text].filter(Boolean).join('\n\n');
+        try {
+          await navigator.clipboard.writeText(txt);
+          toast('Copied');
+        } catch {
+          toast('Couldn’t copy here');
+        }
+      } else if (act === 'delete') {
         if (!b.classList.contains('confirm')) {
           b.classList.add('confirm');
-          b.innerHTML = `${I.trashSm} Delete?`;
+          b.innerHTML = `${I.trashSm} Tap again to delete`;
           return;
         }
         await db.deleteNote(note.id);
@@ -599,7 +646,6 @@ export async function renderNotes(app, navHtml, coverHtml = () => '') {
         </div>
         ${g.notes.map(n => noteCardHtml(n, tagsById, {
           chapter: `Ch. ${fmtNum(chapterById.get(n.chapterId)?.number)}`,
-          link: n.quote ? `#/read/${n.chapterId}/note/${n.id}` : null,
         })).join('')}
       </section>`;
     }).join('');
@@ -689,7 +735,7 @@ export async function openTagManager(onChanged) {
 
   openSheet(`
     <h2>Tags</h2>
-    <p class="hint">Tap a color dot to choose from 19 colors. Deleting a tag keeps the notes; they just lose that tag.</p>
+    <p class="hint">Tap a color dot to choose from 12 colors. Deleting a tag keeps the notes; they just lose that tag.</p>
     <div class="tag-rows">${rowsHtml()}</div>
     <div class="tag-row is-add">
       <span class="tag-color" style="background:var(--surface-3)"></span>
