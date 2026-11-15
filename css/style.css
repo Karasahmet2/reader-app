@@ -1,8 +1,8 @@
 /* ==========================================================================
-Reader — styles
-Colors come from the theme (data-theme on <html>); accent and reading
-values are set as CSS variables by js/settings.js.
-========================================================================== */
+   Reader — styles
+   Colors come from the theme (data-theme on <html>); accent and reading
+   values are set as CSS variables by js/settings.js.
+   ========================================================================== */
 
 :root,
 [data-theme="night"] {
@@ -918,6 +918,13 @@ mark.note-mark.flash { background: color-mix(in srgb, var(--mc) 45%, transparent
 .quote.is-chapter figcaption { font-size: 13px; color: var(--text); }
 
 .tag-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag-groups { display: flex; flex-direction: column; gap: 14px; }
+.tag-group { display: flex; flex-direction: column; gap: 10px; }
+.tag-group-head { margin: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tag-group-head b { font: 600 12px 'Inter', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-group-head span { flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.tag-group .hint { padding: 0; margin: 0; }
+.new-tag .switch-row { padding: 4px 4px 0; }
 .tag-chip {
   height: 40px;
   display: inline-flex;
@@ -1333,6 +1340,8 @@ button.tag-color { cursor: pointer; }
   padding: 0;
 }
 .palette span { width: 24px; height: 24px; border-radius: 12px; }
+.palette .is-used span { opacity: 0.3; }
+.palette .is-used[aria-pressed="true"] span { opacity: 1; }
 .palette [aria-pressed="true"] { border-color: var(--strong); }
 .tag-item { border-bottom: 1px solid var(--line-soft); }
 .tag-item .tag-row { border-bottom: 0; }
@@ -1341,7 +1350,10 @@ button.tag-color { cursor: pointer; }
 /* ---------- Update 3: find ---------- */
 
 .sel-bar button { padding: 0 12px; }
-.sel-bar [data-sel="copy"] { padding: 0; width: 46px; justify-content: center; }
+.sel-bar [data-sel="copy"], .sel-bar [data-sel="highlight"], .sel-bar [data-sel="find"] { padding: 0; width: 46px; justify-content: center; }
+.sel-bar .sel-define { display: none; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+.sel-bar.is-word .sel-define { display: flex; }
+.sel-bar .sel-space { width: 6px; }
 .find-sheet { gap: 14px; }
 .find-opts { display: flex; flex-direction: column; gap: 10px; }
 .find-scopes button { flex-direction: column; gap: 1px; height: 50px; font-size: 14px; }
@@ -1502,3 +1514,74 @@ mark.find-mark { background: color-mix(in srgb, var(--accent) 45%, transparent);
 .snd-timers .chip { flex: 1; justify-content: center; height: 40px; border-radius: 20px; border: 0; font: 500 13px 'Inter', sans-serif; }
 .snd-timers .chip[aria-checked="true"] { background: var(--strong); color: var(--bg); }
 .sounds .hint { padding: 0 4px; margin-top: 4px; }
+
+/* ---------- Update 5: notes by series ---------- */
+
+.series-pick {
+  width: 100%; min-height: 58px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 14px 8px 10px;
+  background: var(--surface); color: var(--muted);
+  border: 0; border-radius: 16px; text-align: left;
+}
+.series-pick .cover { flex-shrink: 0; }
+.series-pick .txt, .pick-row .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.series-pick .txt b, .pick-row .txt b { font: 500 16px 'Lexend', sans-serif; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.series-pick .txt small, .pick-row .txt small { font-size: 12px; color: var(--muted); }
+.series-pick-ico { width: 26px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.chip-sep { width: 1px; height: 24px; flex-shrink: 0; align-self: center; background: var(--surface-3); }
+.pick-list { display: flex; flex-direction: column; gap: 2px; }
+.pick-row {
+  min-height: 60px; display: flex; align-items: center; gap: 12px;
+  padding: 6px 12px; background: none; border: 0; border-radius: 14px;
+  color: var(--accent); text-align: left;
+}
+.pick-row.is-on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pick-row .txt b { font-size: 15px; font-family: 'Inter', sans-serif; font-weight: 400; }
+
+.tag-sections { display: flex; flex-direction: column; gap: 20px; }
+.tag-section { display: flex; flex-direction: column; gap: 6px; scroll-margin-top: 16px; }
+.tag-section .tag-group-head { padding: 0 4px 2px; }
+.tag-more { width: 40px; height: 40px; flex-shrink: 0; color: var(--muted); }
+.tag-more[aria-expanded="true"] { color: var(--accent); }
+.tag-actions { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 10px; }
+.tag-actions .btn { height: 44px; justify-content: center; gap: 8px; }
+.tag-actions .btn.is-confirm { background: var(--danger-bg); color: var(--danger); }
+.tag-actions [data-del] { color: var(--danger); }
+.tag-move { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 4px 0 14px; background: var(--surface-2); border-radius: 14px; font-size: 14px; color: var(--text); }
+.tag-move span { flex: 1; }
+.tag-move select { height: 40px; max-width: 55%; padding: 0 10px; background: var(--surface-3); color: var(--strong); border: 0; border-radius: 10px; font: 14px 'Inter', sans-serif; }
+
+/* ---------- Update 5: Define (dictionary) ---------- */
+
+.define { display: flex; flex-direction: column; gap: 18px; min-height: 160px; }
+.def-head { display: flex; align-items: center; gap: 12px; }
+.def-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.def-title h2 { margin: 0; font: 500 26px 'Lexend', sans-serif; color: var(--bright); overflow-wrap: anywhere; }
+.def-sub { font-size: 15px; color: var(--muted); }
+.def-base { font-size: 12px; color: var(--muted); }
+.def-audio {
+  width: 48px; height: 48px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+  border: 0; border-radius: 24px;
+}
+.def-part { display: flex; flex-direction: column; gap: 10px; }
+.def-part h3 { margin: 0; font: 600 12px 'Inter', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.def-pos { align-self: flex-start; padding: 3px 10px; background: var(--surface-2); border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.def-part ol { margin: 0; padding: 0 0 0 22px; display: flex; flex-direction: column; gap: 10px; color: var(--muted); }
+.def-part li { padding-left: 4px; }
+.def-part li > span { display: block; font-size: 15px; line-height: 1.5; color: var(--strong); }
+.def-part li > em { display: block; margin-top: 4px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.def-syn { display: flex; flex-wrap: wrap; gap: 6px; }
+.def-syn span { padding: 6px 12px; background: var(--surface-2); border-radius: 15px; font-size: 13px; color: var(--text); }
+.def-actions { display: flex; flex-direction: column; gap: 8px; }
+.def-actions .btn, .define .two-btns .btn { gap: 8px; justify-content: center; }
+.def-foot { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.def-foot svg { color: var(--ok, #8fd14f); }
+.def-msg { margin: 0; font-size: 15px; line-height: 1.55; color: var(--text); }
+.def-loading { display: flex; gap: 6px; padding: 8px 2px; }
+.def-loading i { width: 8px; height: 8px; border-radius: 4px; background: var(--muted); animation: snd-pulse 1s ease-in-out infinite; }
+.def-loading i:nth-child(2) { animation-delay: 0.15s; }
+.def-loading i:nth-child(3) { animation-delay: 0.3s; }
+.note-series-head[hidden] { display: none; }

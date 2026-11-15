@@ -9,6 +9,8 @@
 //   tags      { id, name, color, order }                                <- your note tags (v3)
 //   notes     { id, seriesId, chapterId, sp, so, ep, eo, quote, text, tagIds: [], createdAt, updatedAt } (v3)
 //   sounds    { id, name, blob, duration, addedAt }                     <- your own background sounds (v4, not in backups)
+//   dictionary { word, entries | null, at }                             <- looked-up definitions, for offline use (v5, not in backups)
+//   (tags got seriesId in v5: a series' id, or null for shared tags)
 //
 // A note points at text with paragraph + character offsets (sp/so = start, ep/eo = end).
 // The quoted text is stored too, so a note can find its place again if the chapter is re-imported.
@@ -19,7 +21,7 @@
 import { nameKey } from './parser.js';
 
 const DB_NAME = 'reader-app';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 let dbPromise = null;
 
 function req(r) {
@@ -60,6 +62,9 @@ export function openDB() {
       }
       if (event.oldVersion < 4) {
         db.createObjectStore('sounds', { keyPath: 'id', autoIncrement: true });
+      }
+      if (event.oldVersion < 5) {
+        db.createObjectStore('dictionary', { keyPath: 'word' });
       }
     };
     open.onsuccess = () => resolve(open.result);
@@ -114,7 +119,7 @@ export const updateSeries = (id, patch) => withTx(['series'], 'readwrite', async
  */
 export function renameSeries(id, newName, merge = false) {
   const key = nameKey(newName);
-  return withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes'], 'readwrite', async s => {
+  return withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes', 'tags'], 'readwrite', async s => {
     const series = await req(s.series.get(id));
     const other = await req(s.series.index('nameKey').get(key));
 
@@ -146,6 +151,18 @@ export function renameSeries(id, newName, merge = false) {
       await req(s.covers.put({ seriesId: other.id, blob: cover.blob }));
     }
     await req(s.covers.delete(id));
+    // This series' own tags move along; one with the same name as a tag there is joined into it.
+    const allTags = await req(s.tags.getAll());
+    for (const t of allTags.filter(x => x.seriesId === id)) {
+      const same = allTags.find(x => x.seriesId === other.id && x.name.toLowerCase() === t.name.toLowerCase());
+      if (same) {
+        await retagNotes(s, n => n.seriesId === other.id, t.id, same.id);
+        await req(s.tags.delete(t.id));
+      } else {
+        t.seriesId = other.id;
+        await req(s.tags.put(t));
+      }
+    }
     other.updatedAt = Math.max(other.updatedAt || 0, series.updatedAt || 0);
     other.lastOpenedAt = Math.max(other.lastOpenedAt || 0, series.lastOpenedAt || 0);
     await req(s.series.put(other));
@@ -156,9 +173,10 @@ export function renameSeries(id, newName, merge = false) {
 
 /** Delete a series with all its chapters, texts, progress and cover. */
 export const deleteSeries = id =>
-  withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes'], 'readwrite', async s => {
+  withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes', 'tags'], 'readwrite', async s => {
     const ids = await req(s.chapters.index('seriesId').getAllKeys(id));
     for (const chapterId of ids) await removeChapter(s, chapterId);
+    for (const t of await req(s.tags.getAll())) if (t.seriesId === id) await req(s.tags.delete(t.id));
     await req(s.covers.delete(id));
     await req(s.series.delete(id));
     return ids.length;
@@ -248,11 +266,60 @@ export async function getAllTags() {
   const list = await withTx(['tags'], 'readonly', s => req(s.tags.getAll()));
   return list.sort((a, b) => (a.order ?? a.id) - (b.order ?? b.id));
 }
-export const addTag = (name, color) => withTx(['tags'], 'readwrite', async s => {
+/** Add a tag. seriesId: the series it belongs to, or null for a tag shared by every series. */
+export const addTag = (name, color, seriesId = null) => withTx(['tags'], 'readwrite', async s => {
   const all = await req(s.tags.getAll());
   const order = all.reduce((m, t) => Math.max(m, t.order ?? 0), -1) + 1;
-  const id = await req(s.tags.add({ name, color, order }));
-  return { id, name, color, order };
+  const tag = { name, color, order, seriesId };
+  tag.id = await req(s.tags.add(tag));
+  return tag;
+});
+
+/** On notes matching `which`, replace tag `from` with tag `to`. */
+async function retagNotes(s, which, from, to) {
+  for (const n of await req(s.notes.getAll())) {
+    if (!which(n) || !n.tagIds?.includes(from)) continue;
+    n.tagIds = [...new Set(n.tagIds.map(t => (t === from ? to : t)))];
+    await req(s.notes.put(n));
+  }
+}
+
+/**
+ * Make a tag shared (toSeriesId null) or give it to one series.
+ * A shared tag given to one series leaves a copy behind in every other series whose
+ * notes use it, so no note loses a tag. A tag with the same name already in the
+ * new place is joined instead of making a duplicate.
+ */
+export const moveTag = (id, toSeriesId) => withTx(['tags', 'notes'], 'readwrite', async s => {
+  const all = await req(s.tags.getAll());
+  const tag = all.find(t => t.id === id);
+  if (!tag) return null;
+  const sameName = sid => all.find(t => t.id !== id && (t.seriesId ?? null) === sid
+    && t.name.toLowerCase() === tag.name.toLowerCase());
+  let order = all.reduce((m, t) => Math.max(m, t.order ?? 0), -1);
+
+  if (toSeriesId != null) {
+    const users = new Set((await req(s.notes.getAll()))
+      .filter(n => n.tagIds?.includes(id) && n.seriesId !== toSeriesId).map(n => n.seriesId));
+    for (const sid of users) {
+      let copy = sameName(sid);
+      if (!copy) {
+        copy = { name: tag.name, color: tag.color, order: ++order, seriesId: sid };
+        copy.id = await req(s.tags.add(copy));
+        all.push(copy);
+      }
+      await retagNotes(s, n => n.seriesId === sid, id, copy.id);
+    }
+  }
+  const target = sameName(toSeriesId ?? null);
+  if (target) {
+    await retagNotes(s, () => true, id, target.id);
+    await req(s.tags.delete(id));
+    return target;
+  }
+  tag.seriesId = toSeriesId ?? null;
+  await req(s.tags.put(tag));
+  return tag;
 });
 export const updateTag = (id, patch) => withTx(['tags'], 'readwrite', async s => {
   const tag = await req(s.tags.get(id));
@@ -271,6 +338,10 @@ export const deleteTag = id => withTx(['tags', 'notes'], 'readwrite', async s =>
     }
   }
 });
+
+// ---------- Dictionary (saved lookups) ----------
+export const getDefinition = word => withTx(['dictionary'], 'readonly', s => req(s.dictionary.get(word)));
+export const putDefinition = obj => withTx(['dictionary'], 'readwrite', s => req(s.dictionary.put(obj)));
 
 // ---------- Notes ----------
 export const getAllNotes = () => withTx(['notes'], 'readonly', s => req(s.notes.getAll()));

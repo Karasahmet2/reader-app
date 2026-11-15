@@ -5,7 +5,7 @@ export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export const fmtNum = n => (n == null ? '?' : String(Math.round(n * 100) / 100));
-export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+export const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
 /** Shorten long text for previews. */
 export const short = (s, n = 280) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
@@ -62,6 +62,7 @@ export const I = {
   shieldOk: svg('<path d="M12 3.5l7 3v5c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9v-5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>', 22),
   upload: svg('<path d="M12 20V9M7.5 13.5L12 9l4.5 4.5M5 5h14"/>', 20),
   bookOpen: svg('<path d="M12 6.5C10 5 7 4.5 3.5 5v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5zM12 6.5v13"/>', 22),
+  book: svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11M9 8.5h6"/>', 18),
   download: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>', 20, 2),
 };
 

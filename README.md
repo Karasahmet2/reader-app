@@ -95,6 +95,27 @@ Plain HTML, CSS and JavaScript — no build step.
   which looked alike). Existing tags move to the closest new color automatically, each
   tag getting its own color while there are free ones.
 
+## Update 5
+
+- **Define**: select a single word → **Define** (next to Note). Shows pronunciation (tap to
+  play), meanings by word type with examples, and similar words, from the Free Dictionary
+  API (Wiktionary). Inflected words are looked up in their base form ("regarded" → "regard").
+  Every looked-up word is **saved on the phone**, so it works offline the next time.
+  **Save as vocabulary note** opens the note sheet with the definition filled in and the
+  shared Vocabulary tag picked. Words not in the dictionary (web-novel terms, names) offer
+  *Add a note* instead. Needs internet the first time a word is looked up.
+- **Tags per series**: each series has its own tags; **shared** tags (Vocabulary, Sayings,
+  Likes…) appear in every series. The note sheet shows the series' tags, then the shared
+  ones. A new tag belongs to the series you're reading unless you switch on *Share with all
+  series*. Colors only need to differ within one series.
+- **Notes tab**: pick a series at the top (or All series). Filter chips show that series'
+  tags, a divider, then the shared tags.
+- **Tag manager**: grouped into Shared and one section per series. ⋯ on a tag: make it
+  shared, move it to one series (other series that used it keep a copy), or delete it.
+- **Series page menu → Notes & tags** opens the Notes tab on that series.
+- Existing tags were sorted automatically: Vocabulary/Sayings/Likes-type names and tags used
+  in several series became shared; a tag used in only one series went to that series.
+
 ## Project structure
 
 ```
@@ -109,6 +130,7 @@ js/ui.js              shared helpers: icons, toasts, bottom sheets
 js/backup.js          backup file: create, check, restore
 js/find.js            Find uses: search chapters, jump to results
 js/sounds.js          background sounds: built-in sounds, your own sounds, sleep timer
+js/dictionary.js      Define: word lookups, saved definitions for offline use
 sw.js                 offline support (bump VERSION after changes)
 manifest.webmanifest  app name and icons for "Add to Home screen"
 icons/                app icons
@@ -144,7 +166,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v9` → `reader-v10`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v10` → `reader-v11`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

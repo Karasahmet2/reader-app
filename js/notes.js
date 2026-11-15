@@ -9,6 +9,7 @@ import * as db from './db.js';
 import { TAG_PALETTE, OLD_TAG_COLORS } from './settings.js';
 import { esc, fmtNum, plural, short, I, toast, openSheet, closeOverlay } from './ui.js';
 import { openFind } from './find.js';
+import { isSingleWord } from './dictionary.js';
 
 export const TAG_COLORS = Object.keys(TAG_PALETTE); // 12 colors
 
@@ -20,9 +21,9 @@ export function nextTagColor(tags) {
 }
 
 /** The 12-color picker. `extra` adds attributes to each button (e.g. which tag it's for). */
-function paletteHtml(selected, extra = '') {
+function paletteHtml(selected, extra = '', used = new Set()) {
   return `<div class="palette" role="group" aria-label="Tag color">
-    ${TAG_COLORS.map(c => `<button type="button" data-color="${c}" ${extra} aria-label="${TAG_PALETTE[c].label}" aria-pressed="${c === selected}">
+    ${TAG_COLORS.map(c => `<button type="button" data-color="${c}" ${extra} aria-label="${TAG_PALETTE[c].label}${used.has(c) ? ' (in use)' : ''}" aria-pressed="${c === selected}"${used.has(c) ? ' class="is-used"' : ''}>
       <span style="background:${tagColor(c)}"></span></button>`).join('')}
   </div>`;
 }
@@ -58,6 +59,45 @@ export async function migrateTagColors() {
   }
   return changed;
 }
+
+
+/** Update 5: tags belong to one series, or are shared by all (seriesId null).
+ *  Existing tags: words like Vocabulary, Sayings, Likes become shared; a tag used in
+ *  only one series goes to that series; anything else stays shared so nothing is lost. */
+const SHARED_NAMES = /^(vocab|saying|like|quote|word|idiom|phrase|expression)/i;
+export async function migrateTagScopes() {
+  const tags = await db.getAllTags();
+  const todo = tags.filter(t => t.seriesId === undefined);
+  if (!todo.length) return 0;
+  const users = new Map();
+  for (const note of await db.getAllNotes()) {
+    for (const id of note.tagIds || []) {
+      if (!users.has(id)) users.set(id, new Set());
+      users.get(id).add(note.seriesId);
+    }
+  }
+  for (const t of todo) {
+    const used = users.get(t.id);
+    const seriesId = !SHARED_NAMES.test(t.name) && used?.size === 1 ? [...used][0] : null;
+    await db.updateTag(t.id, { seriesId });
+  }
+  return todo.length;
+}
+
+/** The shared Vocabulary tag (made if it doesn't exist yet), used by "Save as vocabulary note". */
+export async function vocabularyTag() {
+  const tags = await db.getAllTags();
+  const found = tags.find(t => t.seriesId == null && /^vocab/i.test(t.name));
+  if (found) return found;
+  const used = new Set(tags.filter(t => t.seriesId == null).map(t => t.color));
+  return db.addTag('Vocabulary', used.has('blue') ? (TAG_COLORS.find(c => !used.has(c)) || 'blue') : 'blue', null);
+}
+
+/** The tags a note in this series can use: the series' own, then the shared ones. */
+export const tagsFor = (tags, seriesId) => ({
+  own: tags.filter(t => t.seriesId === seriesId && seriesId != null),
+  shared: tags.filter(t => t.seriesId == null),
+});
 
 const byId = list => new Map(list.map(x => [x.id, x]));
 
@@ -205,7 +245,7 @@ function readSelection(textEl, paras) {
 }
 
 /**
- * Show the Note · Highlight · Copy bar while text is selected in the reader.
+ * Show the Note · Define · Highlight · Find · Copy bar while text is selected in the reader.
  * onAction(action, selection) is called when a button is tapped. Returns a cleanup function.
  */
 export function setupSelectionBar(textEl, paras, onAction) {
@@ -215,8 +255,10 @@ export function setupSelectionBar(textEl, paras, onAction) {
   bar.setAttribute('aria-label', 'Selected text');
   bar.innerHTML = `
     <button type="button" class="sel-main" data-sel="note">${I.note}Note</button>
-    <button type="button" data-sel="highlight">${I.highlight}Highlight</button>
-    <button type="button" data-sel="find">${I.searchSm}Find</button>
+    <button type="button" class="sel-define" data-sel="define">${I.book}Define</button>
+    <span class="sel-space"></span>
+    <button type="button" data-sel="highlight" aria-label="Highlight">${I.highlight}</button>
+    <button type="button" data-sel="find" aria-label="Find uses">${I.searchSm}</button>
     <button type="button" data-sel="copy" aria-label="Copy">${I.copy}</button>`;
   document.body.append(bar);
 
@@ -269,6 +311,7 @@ export function setupSelectionBar(textEl, paras, onAction) {
     const info = readSelection(textEl, paras);
     if (info) {
       last = info;
+      bar.classList.toggle('is-word', isSingleWord(info.quote)); // Define: single words only
       place();
       bar.classList.add('show');
       document.body.classList.remove('controls-open');
@@ -311,20 +354,47 @@ export function setupSelectionBar(textEl, paras, onAction) {
  */
 export async function openNoteEditor({ note, where, onSaved }) {
   let tags = await db.getAllTags();
+  const series = await db.getSeries(note.seriesId);
   const selected = new Set(note.tagIds || []);
-  let newColor = nextTagColor(tags);
+  let makeShared = false;
   const isNew = note.id == null;
 
-  const chipsHtml = () => `
-    ${tags.map(t => `<button type="button" class="tag-chip" data-tag="${t.id}" aria-pressed="${selected.has(t.id)}"
-        style="--tc:${tagColor(t.color)};--tb:${tagBg(t.color)}">
-        <span class="tick">${I.checkSm}</span><i></i>${esc(t.name)}</button>`).join('')}
-    <button type="button" class="tag-chip tag-new" data-newtag>${I.plusSm}New tag</button>`;
+  // Colors already taken where the new tag will live (fainter in the picker).
+  const usedColors = () => {
+    const { own, shared } = tagsFor(tags, note.seriesId);
+    return new Set([...shared, ...(makeShared ? [] : own)].map(t => t.color));
+  };
+  const freshColor = () => {
+    const used = usedColors();
+    return TAG_COLORS.find(c => !used.has(c)) || nextTagColor(tags);
+  };
+  let newColor = freshColor();
+
+  const chip = t => `<button type="button" class="tag-chip" data-tag="${t.id}" aria-pressed="${selected.has(t.id)}"
+      style="--tc:${tagColor(t.color)};--tb:${tagBg(t.color)}">
+      <span class="tick">${I.checkSm}</span><i></i>${esc(t.name)}</button>`;
+  const chipsHtml = () => {
+    const { own, shared } = tagsFor(tags, note.seriesId);
+    return `
+      <div class="tag-group">
+        <p class="tag-group-head"><b>${esc(series?.name || 'This series')}</b><span>this series only</span></p>
+        <div class="tag-chips">${own.map(chip).join('')}
+          <button type="button" class="tag-chip tag-new" data-newtag>${I.plusSm}New tag</button></div>
+      </div>
+      <div class="tag-group">
+        <p class="tag-group-head"><b>Shared</b><span>every series</span></p>
+        <div class="tag-chips">${shared.map(chip).join('') || '<span class="hint">No shared tags yet</span>'}</div>
+      </div>`;
+  };
 
   const newTagHtml = () => `
     <div class="new-tag" hidden>
       <input class="text-input" id="new-tag-name" type="text" placeholder="Tag name" maxlength="30" autocomplete="off">
-      ${paletteHtml(newColor)}
+      <div class="new-tag-palette">${paletteHtml(newColor, '', usedColors())}</div>
+      <label class="switch-row">
+        <span class="txt"><b>Share with all series</b><small id="share-hint">Off: only ${esc(series?.name || 'this series')} has this tag</small></span>
+        <input type="checkbox" id="new-tag-shared" role="switch">
+      </label>
       <button type="button" class="btn btn-accent" data-addtag>Add tag</button>
     </div>`;
 
@@ -336,8 +406,7 @@ export async function openNoteEditor({ note, where, onSaved }) {
     <h2>${isNew ? (note.quote ? 'Add note' : 'Add chapter note') : 'Edit note'}</h2>
     ${quoteHtml}
     <div class="field">
-      <p class="label" style="padding:0">Tags</p>
-      <div class="tag-chips">${chipsHtml()}</div>
+      <div class="tag-groups">${chipsHtml()}</div>
       ${newTagHtml()}
     </div>
     <label class="field">
@@ -348,29 +417,45 @@ export async function openNoteEditor({ note, where, onSaved }) {
       <button type="button" class="btn" data-ne="cancel">Cancel</button>
       <button type="button" class="btn btn-accent" data-ne="save">Save note</button>
     </div>`, sheet => {
-    const chips = sheet.querySelector('.tag-chips');
+    const groups = sheet.querySelector('.tag-groups');
     const newRow = sheet.querySelector('.new-tag');
     const nameInput = sheet.querySelector('#new-tag-name');
+    const sharedBox = sheet.querySelector('#new-tag-shared');
+    const drawPalette = () => {
+      sheet.querySelector('.new-tag-palette').innerHTML = paletteHtml(newColor, '', usedColors());
+    };
     if (!note.quote) sheet.querySelector('#note-text').focus();
 
     const addTag = async () => {
       const name = nameInput.value.replace(/\s+/g, ' ').trim();
       if (!name) { nameInput.focus(); return; }
-      const existing = tags.find(t => t.name.toLowerCase() === name.toLowerCase());
-      const tag = existing || await db.addTag(name, newColor);
+      const { own, shared } = tagsFor(tags, note.seriesId);
+      const existing = [...own, ...shared].find(t => t.name.toLowerCase() === name.toLowerCase());
+      const tag = existing || await db.addTag(name, newColor, makeShared ? null : note.seriesId);
       if (!existing) tags = [...tags, tag];
       selected.add(tag.id);
-      chips.innerHTML = chipsHtml();
+      groups.innerHTML = chipsHtml();
       nameInput.value = '';
       newRow.hidden = true;
+      newColor = freshColor();
+      drawPalette();
     };
 
+    sharedBox.addEventListener('change', () => {
+      makeShared = sharedBox.checked;
+      sheet.querySelector('#share-hint').textContent = makeShared
+        ? 'On: every series can use this tag'
+        : `Off: only ${series?.name || 'this series'} has this tag`;
+      if (usedColors().has(newColor)) newColor = freshColor();
+      drawPalette();
+    });
+
     sheet.addEventListener('click', async e => {
-      const chip = e.target.closest('[data-tag]');
-      if (chip) {
-        const id = Number(chip.dataset.tag);
+      const c = e.target.closest('[data-tag]');
+      if (c) {
+        const id = Number(c.dataset.tag);
         if (selected.has(id)) selected.delete(id); else selected.add(id);
-        chip.setAttribute('aria-pressed', String(selected.has(id)));
+        c.setAttribute('aria-pressed', String(selected.has(id)));
         return;
       }
       if (e.target.closest('[data-newtag]')) {
@@ -381,8 +466,7 @@ export async function openNoteEditor({ note, where, onSaved }) {
       const sw = e.target.closest('[data-color]');
       if (sw) {
         newColor = sw.dataset.color;
-        newRow.querySelectorAll('[data-color]').forEach(b =>
-          b.setAttribute('aria-pressed', String(b.dataset.color === newColor)));
+        drawPalette();
         return;
       }
       if (e.target.closest('[data-addtag]')) { addTag(); return; }
@@ -546,30 +630,49 @@ const NOTE_SORTS = {
   count: 'Most notes',
 };
 const SORT_KEY = 'reader-notes-sort';
+const SERIES_KEY = 'reader-notes-series';
 const savedSort = () => { try { return localStorage.getItem(SORT_KEY); } catch { return null; } };
+const savedSeries = () => {
+  try { const v = localStorage.getItem(SERIES_KEY); return v && v !== 'all' ? Number(v) : 'all'; } catch { return 'all'; }
+};
+const saveSeriesChoice = v => { try { localStorage.setItem(SERIES_KEY, String(v)); } catch { /* ignore */ } };
 
 export const notesState = {
   filter: 'all',
   query: '',
   searchOpen: false,
   sort: NOTE_SORTS[savedSort()] ? savedSort() : 'recent',
+  seriesId: savedSeries(), // 'all' or one series' id
 };
 
 /**
- * Draw the Notes tab into `app`: notes grouped by series, in reading order inside each.
- * navHtml: the bottom navigation. coverHtml(series): a tiny cover for group headers.
+ * Draw the Notes tab into `app`: one series (with its own tags and the shared ones),
+ * or all series (shared tags only), in reading order inside each series.
+ * navHtml: the bottom navigation. coverHtml(series): a tiny cover for headers.
+ * openSeriesId: from #/notes/ID — start on that series.
  */
-export async function renderNotes(app, navHtml, coverHtml = () => '') {
-  const [allNotes, tags, chapters, series] = await Promise.all([
+export async function renderNotes(app, navHtml, coverHtml = () => '', openSeriesId = null) {
+  const [everyNote, tags, chapters, series] = await Promise.all([
     db.getAllNotes(), db.getAllTags(), db.getAllChapters(), db.getAllSeries(),
   ]);
   const tagsById = byId(tags);
   const chapterById = byId(chapters);
   const seriesById = byId(series);
-  if (notesState.filter !== 'all' && !tagsById.has(notesState.filter)) notesState.filter = 'all';
+  if (openSeriesId != null && seriesById.has(openSeriesId)) {
+    notesState.seriesId = openSeriesId;
+    saveSeriesChoice(openSeriesId);
+  }
+  if (notesState.seriesId !== 'all' && !seriesById.has(notesState.seriesId)) notesState.seriesId = 'all';
+  const one = notesState.seriesId !== 'all' ? seriesById.get(notesState.seriesId) : null;
+  const allNotes = one ? everyNote.filter(n => n.seriesId === one.id) : everyNote;
+  const { own, shared } = tagsFor(tags, one?.id ?? null);
+  const chipTags = one ? [...own, ...shared] : shared;
+  if (notesState.filter !== 'all' && !chipTags.some(t => t.id === notesState.filter)) notesState.filter = 'all';
 
   const counts = new Map();
   for (const n of allNotes) for (const id of n.tagIds || []) counts.set(id, (counts.get(id) || 0) + 1);
+  const chipHtml = t => `<button type="button" data-ntag="${t.id}" aria-pressed="${notesState.filter === t.id}">
+    <i class="chip-dot" style="background:${tagColor(t.color)}"></i>${esc(t.name)}${counts.get(t.id) ? ` <span class="count">${counts.get(t.id)}</span>` : ''}</button>`;
 
   app.innerHTML = `<main class="page">
     <div class="row-head">
@@ -581,14 +684,21 @@ export async function renderNotes(app, navHtml, coverHtml = () => '') {
       <span class="visually-hidden">Search notes</span>
       <input id="notes-search" type="search" placeholder="Search words, notes, tags" value="${esc(notesState.query)}" autocomplete="off">
     </label>` : ''}
+    <button type="button" class="series-pick" data-nt="series">
+      ${one ? coverHtml(one) : `<span class="series-pick-ico">${I.notes}</span>`}
+      <span class="txt"><b>${one ? esc(one.name) : 'All series'}</b>
+        <small>${plural(allNotes.length, 'note')}${one ? ` · ${plural(own.length, 'series tag')}` : ` · ${plural(new Set(everyNote.map(n => n.seriesId)).size, 'series', 'series')}`}</small></span>
+      ${I.down}
+    </button>
     <nav class="filter-chips" aria-label="Filter by tag">
       <button type="button" data-ntag="all" aria-pressed="${notesState.filter === 'all'}">All${allNotes.length ? ` <span class="count">${allNotes.length}</span>` : ''}</button>
-      ${tags.map(t => `<button type="button" data-ntag="${t.id}" aria-pressed="${notesState.filter === t.id}">
-        <i class="chip-dot" style="background:${tagColor(t.color)}"></i>${esc(t.name)}${counts.get(t.id) ? ` <span class="count">${counts.get(t.id)}</span>` : ''}</button>`).join('')}
+      ${own.length && one ? own.map(chipHtml).join('') : ''}
+      ${one && own.length && shared.length ? '<span class="chip-sep" aria-hidden="true"></span>' : ''}
+      ${shared.map(chipHtml).join('')}
     </nav>
     <div class="list-meta">
       <span id="notes-count"></span>
-      <button type="button" class="sort-btn" data-nt="sort">${I.sort}${NOTE_SORTS[notesState.sort]}</button>
+      ${one ? '<span>Reading order</span>' : `<button type="button" class="sort-btn" data-nt="sort">${I.sort}${NOTE_SORTS[notesState.sort]}</button>`}
     </div>
     <div id="notes-list" class="notes-groups"></div>
   </main>${navHtml}`;
@@ -614,15 +724,16 @@ export async function renderNotes(app, navHtml, coverHtml = () => '') {
       g.latest = Math.max(g.latest, n.updatedAt || 0);
       groups.set(n.seriesId, g);
     }
-    app.querySelector('#notes-count').textContent =
-      `${groups.size} series · ${plural(shown.length, 'note')}`;
+    app.querySelector('#notes-count').textContent = one
+      ? plural(shown.length, 'note')
+      : `${groups.size} series · ${plural(shown.length, 'note')}`;
 
     if (!shown.length) {
       list.innerHTML = `<div class="empty" style="padding:40px 16px">
         ${allNotes.length
           ? `<span>No notes match${q && notesState.searchOpen ? ` “${esc(notesState.query)}”` : ' this tag'}.</span>`
           : `<span class="empty-ico">${I.notes}</span><strong>No notes yet</strong>
-             <span>While reading, long-press a word or drag across a passage, then tap Note. For a note about the whole chapter, tap the page → Notes.</span>`}
+             <span>${one ? `No notes in ${esc(one.name)} yet. ` : ''}While reading, long-press a word or drag across a passage, then tap Note. For a note about the whole chapter, tap the page → Notes.</span>`}
       </div>`;
       return;
     }
@@ -639,7 +750,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '') {
       g.notes.sort((a, b) => chapterNum(a) - chapterNum(b)
         || (a.sp ?? -1) - (b.sp ?? -1) || (a.so ?? 0) - (b.so ?? 0));
       return `<section class="note-series" aria-label="${esc(seriesName(g.seriesId))}">
-        <div class="note-series-head">
+        <div class="note-series-head"${one ? ' hidden' : ''}>
           ${s ? coverHtml(s) : ''}
           <h2>${esc(seriesName(g.seriesId))}</h2>
           <span>${plural(g.notes.length, 'note')}</span>
@@ -653,6 +764,34 @@ export async function renderNotes(app, navHtml, coverHtml = () => '') {
   draw();
 
   const rerender = () => renderNotes(app, navHtml, coverHtml);
+  const pickSeries = () => {
+    const noteCount = new Map();
+    for (const n of everyNote) noteCount.set(n.seriesId, (noteCount.get(n.seriesId) || 0) + 1);
+    const list = [...series].sort((a, b) => (noteCount.get(b.id) || 0) - (noteCount.get(a.id) || 0)
+      || (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+    const row = (value, ico, name, sub) => `
+      <button type="button" class="pick-row${notesState.seriesId === value ? ' is-on' : ''}" data-pick-series="${value}">
+        ${ico}<span class="txt"><b>${esc(name)}</b><small>${sub}</small></span>${notesState.seriesId === value ? I.check : ''}
+      </button>`;
+    openSheet(`
+      <h2>Show notes from</h2>
+      <div class="pick-list">
+        ${row('all', `<span class="series-pick-ico">${I.notes}</span>`, 'All series', `${plural(everyNote.length, 'note')}, grouped by series`)}
+        ${list.map(s => row(s.id, coverHtml(s), s.name, plural(noteCount.get(s.id) || 0, 'note'))).join('')}
+      </div>
+      <p class="hint">A series page’s menu → Notes & tags opens straight to that series.</p>`, sheet => {
+      sheet.addEventListener('click', e => {
+        const b = e.target.closest('[data-pick-series]');
+        if (!b) return;
+        const v = b.dataset.pickSeries;
+        notesState.seriesId = v === 'all' ? 'all' : Number(v);
+        notesState.filter = 'all';
+        saveSeriesChoice(notesState.seriesId);
+        closeOverlay();
+        rerender();
+      });
+    });
+  };
   const search = app.querySelector('#notes-search');
   if (search) {
     search.addEventListener('input', () => { notesState.query = search.value; draw(); });
@@ -674,7 +813,8 @@ export async function renderNotes(app, navHtml, coverHtml = () => '') {
       rerender();
       return;
     }
-    if (act?.dataset.nt === 'tags') { openTagManager(rerender); return; }
+    if (act?.dataset.nt === 'tags') { openTagManager(rerender, one?.id ?? null); return; }
+    if (act?.dataset.nt === 'series') { pickSeries(); return; }
     if (act?.dataset.nt === 'sort') { openNotesSort(rerender); return; }
     const card = e.target.closest('[data-note-id]');
     if (card) {
@@ -713,14 +853,31 @@ function openNotesSort(onChanged) {
 
 /* ------------------------------------------------------------------ tag manager */
 
-export async function openTagManager(onChanged) {
+export async function openTagManager(onChanged, focusSeriesId = null) {
   let tags = await db.getAllTags();
-  const allNotes = await db.getAllNotes();
-  const counts = new Map();
-  for (const n of allNotes) for (const id of n.tagIds || []) counts.set(id, (counts.get(id) || 0) + 1);
-  let openId = null; // tag whose color palette is open
+  const [allNotes, series] = await Promise.all([db.getAllNotes(), db.getAllSeries()]);
+  const seriesById = byId(series);
+  let counts = new Map();
+  const recount = notes => {
+    counts = new Map();
+    for (const n of notes) for (const id of n.tagIds || []) counts.set(id, (counts.get(id) || 0) + 1);
+  };
+  recount(allNotes);
+  let openId = null;  // tag whose color palette is open
+  let menuId = null;  // tag whose ⋯ actions are open
+  let confirmId = null;
 
-  const rowsHtml = () => tags.map(t => `
+  // Groups: Shared, then the series you came from, then every other series that has tags.
+  const groupIds = () => {
+    const withTags = [...new Set(tags.filter(t => t.seriesId != null).map(t => t.seriesId))]
+      .filter(id => seriesById.has(id))
+      .sort((x, y) => seriesById.get(x).name.localeCompare(seriesById.get(y).name, undefined, { sensitivity: 'base', numeric: true }));
+    const ids = focusSeriesId != null && seriesById.has(focusSeriesId) ? [focusSeriesId] : [];
+    return [null, ...ids, ...withTags.filter(id => id !== focusSeriesId)];
+  };
+  const inGroup = sid => tags.filter(t => (t.seriesId ?? null) === sid);
+
+  const rowHtml = t => `
     <div class="tag-item">
       <div class="tag-row" data-row="${t.id}">
         <button type="button" class="tag-color" data-pick="${t.id}" aria-expanded="${openId === t.id}"
@@ -728,34 +885,59 @@ export async function openTagManager(onChanged) {
         <label class="tag-name"><span class="visually-hidden">Tag name</span>
           <input type="text" value="${esc(t.name)}" data-rename="${t.id}" maxlength="30" autocomplete="off"></label>
         <span class="tag-count">${counts.get(t.id) || 0}</span>
-        <button type="button" class="icon-btn tag-del" data-del="${t.id}" aria-label="Delete ${esc(t.name)}">${I.trashSm}</button>
+        <button type="button" class="icon-btn tag-more" data-more="${t.id}" aria-expanded="${menuId === t.id}" aria-label="More for ${esc(t.name)}">${I.dots}</button>
       </div>
-      ${openId === t.id ? paletteHtml(t.color, `data-for="${t.id}"`) : ''}
-    </div>`).join('');
+      ${openId === t.id ? paletteHtml(t.color, `data-for="${t.id}"`,
+        new Set(tags.filter(x => x.id !== t.id && ((x.seriesId ?? null) === (t.seriesId ?? null) || x.seriesId == null)).map(x => x.color))) : ''}
+      ${menuId === t.id ? `<div class="tag-actions">
+        ${t.seriesId == null
+          ? `<label class="tag-move"><span>Move to one series</span>
+              <select data-move="${t.id}"><option value="">Choose…</option>
+                ${series.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>`
+          : `<button type="button" class="btn" data-share="${t.id}">Make shared (every series)</button>`}
+        <button type="button" class="btn${confirmId === t.id ? ' is-confirm' : ''}" data-del="${t.id}">${I.trashSm}${confirmId === t.id ? 'Tap again to delete' : 'Delete'}</button>
+      </div>` : ''}
+    </div>`;
 
-  openSheet(`
-    <h2>Tags</h2>
-    <p class="hint">Tap a color dot to choose from 12 colors. Deleting a tag keeps the notes; they just lose that tag.</p>
-    <div class="tag-rows">${rowsHtml()}</div>
-    <div class="tag-row is-add">
-      <span class="tag-color" style="background:var(--surface-3)"></span>
-      <label class="tag-name"><span class="visually-hidden">New tag name</span>
-        <input type="text" id="add-tag" placeholder="New tag" maxlength="30" autocomplete="off"></label>
-      <button type="button" class="btn btn-accent" data-add style="height:40px;padding:0 14px;font-size:14px">Add</button>
-    </div>`, sheet => {
-    const rows = sheet.querySelector('.tag-rows');
-    const redraw = () => { rows.innerHTML = rowsHtml(); };
+  const groupHtml = sid => {
+    const list = inGroup(sid);
+    const name = sid == null ? 'Shared' : seriesById.get(sid)?.name || 'Series';
+    return `<section class="tag-section" data-group="${sid ?? 'shared'}">
+      <p class="tag-group-head"><b>${esc(name)}</b><span>${sid == null ? 'every series' : plural(list.length, 'tag')}</span></p>
+      ${list.map(rowHtml).join('')}
+      <div class="tag-row is-add">
+        <span class="tag-color" style="background:var(--surface-3)"></span>
+        <label class="tag-name"><span class="visually-hidden">New tag in ${esc(name)}</span>
+          <input type="text" data-add-in="${sid ?? 'shared'}" placeholder="${sid == null ? 'New shared tag' : 'New tag'}" maxlength="30" autocomplete="off"></label>
+        <button type="button" class="btn btn-accent" data-add="${sid ?? 'shared'}" style="height:40px;padding:0 14px;font-size:14px">Add</button>
+      </div>
+    </section>`;
+  };
 
-    const add = async () => {
-      const input = sheet.querySelector('#add-tag');
-      const name = input.value.replace(/\s+/g, ' ').trim();
-      if (!name) { input.focus(); return; }
-      if (tags.some(t => t.name.toLowerCase() === name.toLowerCase())) { toast('That tag already exists'); return; }
-      const tag = await db.addTag(name, nextTagColor(tags));
-      tags = [...tags, tag];
-      input.value = '';
+  const notesTag = '<p class="hint">Tags in a series only show up in that series; shared tags show up everywhere. Colors only need to differ within one series. ⋯ on a tag: make it shared, move it to a series, or delete it (its notes stay).</p>';
+
+  openSheet(`<h2>Tags</h2>${notesTag}<div class="tag-sections"></div>`, sheet => {
+    const box = sheet.querySelector('.tag-sections');
+    const redraw = () => { box.innerHTML = groupIds().map(groupHtml).join(''); };
+    redraw();
+    const changed = async () => {
+      tags = await db.getAllTags();
+      recount(await db.getAllNotes());
       redraw();
       onChanged?.();
+    };
+
+    const add = async key => {
+      const input = box.querySelector(`[data-add-in="${key}"]`);
+      const sid = key === 'shared' ? null : Number(key);
+      const name = input.value.replace(/\s+/g, ' ').trim();
+      if (!name) { input.focus(); return; }
+      const scope = sid == null ? inGroup(null) : [...inGroup(sid), ...inGroup(null)];
+      if (scope.some(t => t.name.toLowerCase() === name.toLowerCase())) { toast('That tag already exists here'); return; }
+      const used = new Set(scope.map(t => t.color));
+      await db.addTag(name, TAG_COLORS.find(c => !used.has(c)) || nextTagColor(scope), sid);
+      await changed();
+      box.querySelector(`[data-add-in="${key}"]`)?.focus();
     };
 
     sheet.addEventListener('click', async e => {
@@ -763,36 +945,57 @@ export async function openTagManager(onChanged) {
       if (pick) {
         const id = Number(pick.dataset.pick);
         openId = openId === id ? null : id;
+        menuId = null;
+        redraw();
+        return;
+      }
+      const more = e.target.closest('[data-more]');
+      if (more) {
+        const id = Number(more.dataset.more);
+        menuId = menuId === id ? null : id;
+        openId = null;
+        confirmId = null;
         redraw();
         return;
       }
       const sw = e.target.closest('[data-color][data-for]');
       if (sw) {
-        const t = tags.find(x => x.id === Number(sw.dataset.for));
-        t.color = sw.dataset.color;
-        await db.updateTag(t.id, { color: t.color });
+        await db.updateTag(Number(sw.dataset.for), { color: sw.dataset.color });
         openId = null;
-        redraw();
-        onChanged?.();
+        await changed();
+        return;
+      }
+      const share = e.target.closest('[data-share]');
+      if (share) {
+        await db.moveTag(Number(share.dataset.share), null);
+        menuId = null;
+        toast('Now shared by every series');
+        await changed();
         return;
       }
       const del = e.target.closest('[data-del]');
       if (del) {
-        if (!del.classList.contains('confirm')) {
-          del.classList.add('confirm');
-          del.innerHTML = `${I.trashSm}<span>Delete?</span>`;
-          return;
-        }
         const id = Number(del.dataset.del);
+        if (confirmId !== id) { confirmId = id; redraw(); return; }
         await db.deleteTag(id);
-        tags = tags.filter(t => t.id !== id);
-        redraw();
-        onChanged?.();
+        menuId = null;
+        confirmId = null;
+        await changed();
         return;
       }
-      if (e.target.closest('[data-add]')) add();
+      const addBtn = e.target.closest('[data-add]');
+      if (addBtn) add(addBtn.dataset.add);
     });
     sheet.addEventListener('change', async e => {
+      if (e.target.dataset.move) {
+        const to = Number(e.target.value);
+        if (!to) return;
+        await db.moveTag(Number(e.target.dataset.move), to);
+        menuId = null;
+        toast(`Moved to ${seriesById.get(to)?.name || 'series'}`);
+        await changed();
+        return;
+      }
       const id = e.target.dataset.rename;
       if (id == null) return;
       const name = e.target.value.replace(/\s+/g, ' ').trim();
@@ -802,6 +1005,11 @@ export async function openTagManager(onChanged) {
       await db.updateTag(t.id, { name });
       onChanged?.();
     });
-    sheet.querySelector('#add-tag').addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+    sheet.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.target.dataset.addIn) add(e.target.dataset.addIn);
+    });
+    if (focusSeriesId != null) {
+      requestAnimationFrame(() => box.querySelector(`[data-group="${focusSeriesId}"]`)?.scrollIntoView({ block: 'start' }));
+    }
   });
 }

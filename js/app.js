@@ -19,6 +19,7 @@ import * as notes from './notes.js';
 import * as backup from './backup.js';
 import * as find from './find.js';
 import * as sounds from './sounds.js';
+import * as dictionary from './dictionary.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -218,7 +219,7 @@ async function route() {
     if (view === 'series' && id) await renderSeries(Number(id));
     else if (view === 'read' && id) await renderReader(Number(id), sub === 'note' ? Number(subId) : null, findJump);
     else if (view === 'import') await renderImport();
-    else if (view === 'notes') await notes.renderNotes(app, nav('notes'), s => cover(s, 'xs'));
+    else if (view === 'notes') await notes.renderNotes(app, nav('notes'), s => cover(s, 'xs'), id ? Number(id) : null);
     else if (view === 'settings') await renderSettings();
     else if (view === 'backup') await renderBackup();
     else await renderLibrary();
@@ -557,6 +558,7 @@ function openSeriesMenu() {
       </div>
     </div>
     <div class="menu-list">
+      <button type="button" data-sa="notes">${I.tag}<span>Notes & tags</span></button>
       <button type="button" data-sa="rename">${I.pencil}<span>Rename series</span></button>
       <button type="button" data-sa="status">${I.status}<span>Status</span><em>${STATUS[statusOf(s)].label}</em></button>
       ${s.chapterCount ? `<button type="button" data-sa="readall">${I.checks}<span>${s.allRead ? 'Mark all as unread' : 'Mark all as read'}</span></button>` : ''}
@@ -583,6 +585,7 @@ function openSeriesMenu() {
           setCoverUrl(s.id, null);
           closeAndRefresh();
           break;
+        case 'notes': closeOverlay({ navTo: `#/notes/${s.id}` }); break;
         case 'rename': openRenameSheet(); break;
         case 'status': openStatusSheet(); break;
         case 'readall':
@@ -1049,6 +1052,15 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       find.openFind({ term: sel.quote.split('\n')[0], chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch });
     } else if (action === 'copy') {
       try { await navigator.clipboard.writeText(sel.quote); toast('Copied'); } catch { toast('Couldn’t copy'); }
+    } else if (action === 'define') {
+      dictionary.openDefine({
+        text: sel.quote,
+        onNote: async text => {
+          const tagIds = text ? [(await notes.vocabularyTag()).id] : [];
+          notes.openNoteEditor({ note: { ...draft, text, tagIds }, where, onSaved: refreshNotes });
+        },
+        onFind: () => find.openFind({ term: dictionary.cleanWord(sel.quote), chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch }),
+      });
     }
   });
 
@@ -1788,4 +1800,7 @@ sounds.onChange(() => document.querySelectorAll('.snd-btn')
   .forEach(b => b.classList.toggle('is-playing', sounds.isPlaying())));
 
 // Update 4: tags still using an old color move to the new 12, then the app starts.
-notes.migrateTagColors().catch(err => console.warn('Tag colors not updated', err)).finally(route);
+notes.migrateTagColors()
+  .then(() => notes.migrateTagScopes()) // Update 5: series tags and shared tags
+  .catch(err => console.warn('Tags not updated', err))
+  .finally(route);
