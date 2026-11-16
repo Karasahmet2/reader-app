@@ -202,6 +202,33 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 11 — Navigation fixes and Codex editing
+
+**Getting back where you were**
+- Every back arrow now goes back to the page you came from, the same as the phone's back
+  gesture (Codex entry → back to the reader, Notes → note → back to Notes, and so on). Only when
+  there is nothing behind (opened from a bookmark, after a restart) does it go to its parent page.
+- The Notes page has a back arrow.
+- Lists keep their scroll position when you come back to them.
+- Next / previous chapter replace the reader page, so back leaves the reader instead of walking
+  back through every chapter.
+
+**Codex**
+- Entry page: each field is its own card, values listed one under another.
+  Connections show only the name; the ▾ opens the description, the chapters and an Edit button.
+  Tapping the name still goes to that entry.
+- Connections can end: "Until → Ended · Last true in Ch. X". Ended ones move to a "Past" group
+  with their chapters (e.g. Ch. 6–17).
+- "Viewing as of" is one choice for the whole series' Codex: it stays while you move between
+  entries ("Back to my progress" resets it). Opening an entry from the reader starts at that chapter.
+- Edit anything without deleting it: in the editor every value and connection is a row; tap it to
+  change the text, the description, the chapters, or what it links to. The phone's back gesture
+  steps back inside the editor.
+- Chapter picker instead of − / +: type a number, use "This chapter" / "My progress", or pick
+  from the list.
+- Reader: the eye button ("Show in text") has two tabs: Notes (as before) and Codex, with a switch
+  per room to stop marking those names in the text. Remembered per series.
+
 ## Update 10 — Series tags, notes on/off, chapter ranges
 
 - **No more shared tags.** Every series has its own tags. Old shared tags are sorted out
@@ -275,7 +302,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v17` → `reader-v18`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v18` → `reader-v19`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

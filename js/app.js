@@ -14,6 +14,7 @@ import {
 } from './settings.js';
 import {
   esc, fmtNum, plural, I, toast, openOverlay, closeOverlay, openSheet, isOverlayOpen,
+  trackRoute, replaceHash, goBack, goUp,
 } from './ui.js';
 import * as notes from './notes.js';
 import * as backup from './backup.js';
@@ -214,6 +215,7 @@ async function route() {
     : null;
   const keepScroll = view === (route.lastView) && view !== 'read';
   const y = window.scrollY;
+  const restoreY = trackRoute();
   route.lastView = view;
   try {
     await loadCovers();
@@ -226,7 +228,7 @@ async function route() {
     else if (view === 'settings') await renderSettings();
     else if (view === 'backup') await renderBackup();
     else await renderLibrary();
-    window.scrollTo(0, keepScroll ? y : (view === 'read' ? window.scrollY : 0));
+    window.scrollTo(0, view === 'read' ? window.scrollY : (restoreY ?? (keepScroll ? y : 0)));
   } catch (err) {
     console.error(err);
     app.innerHTML = `<main class="page"><div class="empty">
@@ -236,6 +238,18 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
+
+// Back arrows (data-back), links up to a parent page (data-up) and chapter-to-chapter
+// links (data-replace) — see "page history" in ui.js.
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-back], a[data-up], a[data-replace]');
+  if (!a || e.defaultPrevented || e.button > 0 || e.metaKey || e.ctrlKey) return;
+  e.preventDefault();
+  const h = a.getAttribute('href');
+  if ('back' in a.dataset) goBack(h);
+  else if ('up' in a.dataset) goUp(h);
+  else replaceHash(h);
+});
 
 /* ------------------------------------------------------------------ library data */
 
@@ -520,7 +534,7 @@ async function renderSeries(id, tab = 'chapters') {
   app.innerHTML = `<div class="wash" style="--cc:${coverRgb(series)}"></div>
   <main class="page" style="gap:18px;padding-top:14px">
     <header style="display:flex;align-items:center;justify-content:space-between">
-      <a class="icon-btn" href="#/" aria-label="Back to library">${I.back}</a>
+      <a class="icon-btn" href="#/" data-back aria-label="Back">${I.back}</a>
       <button type="button" class="icon-btn" data-action="series-menu" aria-label="Series options">${I.dots}</button>
     </header>
     <section class="series-hero" aria-label="Series details">
@@ -800,32 +814,32 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   const end = next ? `
       <div class="done"><strong>Chapter ${n} finished</strong><span id="read-note">${chapter.read ? 'Marked as read' : ''}</span></div>
       ${reflect}
-      <a class="next-card" href="#/read/${next.id}">
+      <a class="next-card" href="#/read/${next.id}" data-replace>
         <span class="txt"><small>Up next</small><b>Chapter ${fmtNum(next.number)}${next.title ? ': ' + esc(next.title) : ''}</b></span>
         <span class="round-go">${I.next}</span>
       </a>
       <div class="two-btns">
-        <a class="btn btn-outline" href="#/series/${series.id}">${I.list} All chapters</a>
-        <a class="btn btn-outline" href="#/">${I.library} Library</a>
+        <a class="btn btn-outline" href="#/series/${series.id}" data-up>${I.list} All chapters</a>
+        <a class="btn btn-outline" href="#/" data-up>${I.library} Library</a>
       </div>` : `
       <div class="done"><strong>You’re caught up</strong><span id="read-note">Import Chapter ${fmtNum(chapter.number + 1)} when it comes out.</span></div>
       ${reflect}
       <div class="two-btns">
         <a class="btn btn-outline" href="#/import">${I.import} Import</a>
-        <a class="btn btn-outline" href="#/">${I.library} Library</a>
+        <a class="btn btn-outline" href="#/" data-up>${I.library} Library</a>
       </div>`;
 
   const navBtn = (c, label, isNext) => c
-    ? `<a class="btn" href="#/read/${c.id}">${isNext ? '' : I.back} ${label} ${isNext ? I.next : ''}</a>`
+    ? `<a class="btn" href="#/read/${c.id}" data-replace>${isNext ? '' : I.back} ${label} ${isNext ? I.next : ''}</a>`
     : `<span class="btn" aria-disabled="true" style="opacity:.4">${isNext ? '' : I.back} ${label} ${isNext ? I.next : ''}</span>`;
 
   app.innerHTML = `
     <header class="reader-top">
-      <a class="icon-btn" href="#/series/${series.id}" aria-label="Back to series">${I.back}</a>
+      <a class="icon-btn" href="#/series/${series.id}" data-back aria-label="Back">${I.back}</a>
       <div class="titles"><b>${esc(series.name)}</b><span>Ch. ${n}${chapter.title ? ' · ' + esc(chapter.title) : ''}</span></div>
-      <button type="button" class="icon-btn vis-btn${notes.anyHidden(series.id) ? ' is-filtered' : ''}" data-action="notes-visibility" aria-label="Show or hide notes in the text">${I.note}</button>
+      <button type="button" class="icon-btn vis-btn${notes.anyHidden(series.id) || codex.hiddenRooms(series.id).size ? ' is-filtered' : ''}" data-action="notes-visibility" aria-label="Show in text: notes and Codex names">${I.eye}</button>
       <button type="button" class="icon-btn snd-btn${sounds.isPlaying() ? ' is-playing' : ''}" data-action="open-sounds" aria-label="Background sounds">${sounds.HEADPHONES}</button>
-      <a class="icon-btn" href="#/series/${series.id}" aria-label="Chapter list">${I.list}</a>
+      <a class="icon-btn" href="#/series/${series.id}" data-up aria-label="Chapter list">${I.list}</a>
     </header>
 
     <div class="reader" id="reader">
@@ -868,6 +882,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   // ---- notes in this chapter ----
   const where = `${series.name} · Ch. ${n}`;
   let cxEntries = [];
+  let cxSchema = null;
   let chapterNoteList = [];
   /** After saving a note: if its tags are switched off, keep it visible for now and say so. */
   async function afterNoteSaved(saved, isNew) {
@@ -884,13 +899,16 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     const schema = await codex.schemaOf(series.id, entries);
     // Only what you knew by this chapter (re-reading Ch. 5 hides what you learned in Ch. 9).
     cxEntries = schema ? codex.knownAt(entries, schema, chapter.number) : [];
+    cxSchema = schema;
     codex.clearNames(textEl);
     chapterNoteList = list;
     notes.clearMarks(textEl);
     notes.applyMarks(paras, notes.visibleNotes(list, series.id), tags); // tags you switched off stay out of the text
-    document.querySelector('.vis-btn')?.classList.toggle('is-filtered', notes.anyHidden(series.id));
-    // Codex names get a dotted underline (after the note marks, which use text positions).
-    if (settings.codexNames !== false && schema) codex.applyNames(paras, cxEntries, schema);
+    const offRooms = codex.hiddenRooms(series.id);
+    document.querySelector('.vis-btn')?.classList.toggle('is-filtered', notes.anyHidden(series.id) || offRooms.size > 0);
+    // Codex names get a dotted underline (after the note marks, which use text positions);
+    // rooms switched off under "Show in text" are left out.
+    if (settings.codexNames !== false && schema) codex.applyNames(paras, cxEntries.filter(e => !offRooms.has(e.type)), schema);
   }
   function jumpTo(noteId) {
     const marks = textEl.querySelectorAll(`mark[data-note="${noteId}"]`);
@@ -1076,7 +1094,21 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     restore,
     refreshNotes,
     chapterNotes: () => notes.openChapterNotes(noteCtx),
-    openVisibility: () => notes.openVisibility({ seriesId: series.id, noteList: chapterNoteList, onChange: refreshNotes }),
+    openVisibility: () => {
+      let cx = null;
+      if (cxSchema) {
+        const counts = codex.countMentions(paras.map(p => p.textContent).join('\n'), cxEntries);
+        const byType = new Map();
+        for (const e of cxEntries) if (counts.has(e.id)) byType.set(e.type, (byType.get(e.type) || 0) + 1);
+        cx = {
+          rooms: cxSchema.types.map(t => ({ id: t.id, name: t.plural || t.name, color: t.color, icon: codex.roomIcon(t), count: byType.get(t.id) || 0 })),
+          hidden: () => codex.hiddenRooms(series.id),
+          setHidden: set => codex.setHiddenRooms(series.id, set),
+          off: settings.codexNames === false,
+        };
+      }
+      notes.openVisibility({ seriesId: series.id, noteList: chapterNoteList, onChange: refreshNotes, codex: cx });
+    },
     openCodex: () => codex.openReaderCodex({ seriesId: series.id, chapterText: paras.map(p => p.textContent).join('\n'), asOf: chapter.number, onChanged: refreshNotes }),
     relock: () => (settings.keepAwake ? lockScreen() : unlockScreen()),
   };
@@ -1145,7 +1177,6 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   // when a sheet closes (that used to undo jumps to Find results).
   history.scrollRestoration = 'manual';
   cleanupView = async () => {
-    history.scrollRestoration = 'auto';
     find.hideStepper();
     window.removeEventListener('scroll', onScroll);
     document.removeEventListener('visibilitychange', onVisibility);
@@ -1775,7 +1806,7 @@ async function renderBackup() {
 
   app.innerHTML = `<main class="page" style="gap:18px;padding-top:14px">
     <header style="display:flex;align-items:center;gap:6px">
-      <a class="icon-btn" href="#/settings" aria-label="Back to settings">${I.back}</a>
+      <a class="icon-btn" href="#/settings" data-back aria-label="Back">${I.back}</a>
       <h1 style="margin:0;font-family:Lexend,sans-serif;font-size:20px;font-weight:500;color:var(--strong)">Backup &amp; restore</h1>
     </header>
     ${statusHtml}
@@ -1906,7 +1937,7 @@ document.addEventListener('click', e => {
       break;
     case 'series-tab': {
       const t = el.dataset.tab;
-      location.replace(`#/series/${currentSeries.id}${t === 'chapters' ? '' : `/${t}`}`);
+      replaceHash(`#/series/${currentSeries.id}${t === 'chapters' ? '' : `/${t}`}`);
       break;
     }
     case 'toggle-order':

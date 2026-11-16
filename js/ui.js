@@ -63,6 +63,7 @@ export const I = {
   upload: svg('<path d="M12 20V9M7.5 13.5L12 9l4.5 4.5M5 5h14"/>', 20),
   bookOpen: svg('<path d="M12 6.5C10 5 7 4.5 3.5 5v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5zM12 6.5v13"/>', 22),
   book: svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11M9 8.5h6"/>', 18),
+  eye: svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', 21),
   download: svg('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>', 20, 2),
 };
 
@@ -77,6 +78,66 @@ export function toast(message) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+/* ---------- page history ----------
+   Every page entry in the browser history is stamped with its depth in this visit, so a back
+   arrow can tell whether there is an app page behind it. Back arrows go back exactly like the
+   phone's back gesture; only when there's nothing behind (opened from a bookmark or after a
+   restart) do they go to their fixed parent page, without adding a step. */
+
+const TRAIL_KEY = 'reader-trail';
+let depth = -1;
+let replacing = false;
+const currentHash = () => location.hash || '#/';
+const sameHash = h => currentHash() === (h || '#/');
+function readTrail() { try { return JSON.parse(sessionStorage.getItem(TRAIL_KEY)) || []; } catch { return []; } }
+function saveTrail(t) { try { sessionStorage.setItem(TRAIL_KEY, JSON.stringify(t.slice(0, 80))); } catch { /* private mode */ } }
+
+history.scrollRestoration = 'manual';
+
+/** Router calls this first on every route. Returns the scroll position to restore when
+ *  coming back to a page you were on (back / forward), otherwise null. */
+export function trackRoute() {
+  const t = readTrail();
+  if (depth >= 0 && t[depth]) t[depth].y = window.scrollY; // remember where you were on the page you left
+  const st = history.state;
+  let returning = false;
+  if (st && typeof st.d === 'number' && !st.overlay) {
+    depth = st.d;
+    returning = true;
+  } else {
+    depth = replacing ? Math.max(depth, 0) : depth + 1;
+    history.replaceState({ d: depth }, '');
+  }
+  replacing = false;
+  const prev = t[depth];
+  const y = returning && prev?.h === currentHash() ? (prev.y || 0) : null;
+  t[depth] = { h: currentHash(), y: y ?? 0 };
+  if (!returning) t.length = depth + 1;
+  saveTrail(t);
+  return y;
+}
+
+/** Go to a page in place of the current one (no new step in the history). */
+export function replaceHash(h) {
+  if (sameHash(h)) return;
+  replacing = true;
+  location.replace(h);
+}
+/** The page before this one in this visit, if any. */
+export function previousHash() {
+  return depth > 0 ? readTrail()[depth - 1]?.h || null : null;
+}
+/** Back arrow: go back if there's an app page behind, else to `fallback`. */
+export function goBack(fallback) {
+  if (depth > 0) history.back();
+  else replaceHash(fallback);
+}
+/** A link to a "higher" page (chapter list, library): if that's where you came from, go back to it. */
+export function goUp(h) {
+  if (previousHash() === (h || '#/')) history.back();
+  else location.hash = h;
+}
+
 /* ---------- overlays (bottom sheets, full-screen panels) ----------
    Each overlay adds one history entry, so the phone's back button closes it.
    Opening a sheet from another sheet swaps them without adding another entry. */
@@ -88,27 +149,51 @@ export const isOverlayOpen = () => !!overlay;
 export function openOverlay(elements) {
   if (overlay) {
     overlay.elements.forEach(el => el.remove());
+    overlay.elements = elements;
   } else {
     history.pushState({ overlay: true }, '');
+    overlay = { elements, steps: [] };
   }
   document.body.append(...elements);
-  overlay = { elements };
+}
+
+/** A step inside the open overlay (e.g. the editor's "Edit connection" view). It adds a
+ *  history entry, so the phone's back gesture runs `onBack` instead of closing everything. */
+export function pushOverlayStep(onBack) {
+  if (!overlay) return;
+  overlay.steps.push(onBack);
+  history.pushState({ overlay: true, step: true }, '');
+}
+/** Leave the current step (same as the back gesture). */
+export function popOverlayStep() {
+  if (overlay?.steps.length) history.back();
 }
 
 /** Close the overlay. navTo: a hash to go to instead of going back. */
 export function closeOverlay({ fromPop = false, navTo = null } = {}) {
   if (!overlay) return;
+  const steps = fromPop ? 0 : overlay.steps.length;
   overlay.elements.forEach(el => el.remove());
   overlay = null;
   if (navTo) {
-    if (location.hash === navTo || (navTo === '#/' && !location.hash)) history.back();
-    else location.replace(navTo); // replaces the overlay's history entry
+    const go = () => {
+      if (location.hash === navTo || (navTo === '#/' && !location.hash)) history.back();
+      else location.replace(navTo); // replaces the overlay's history entry
+    };
+    if (steps) {
+      window.addEventListener('popstate', go, { once: true });
+      history.go(-steps);
+    } else go();
   } else if (!fromPop) {
-    history.back();
+    history.go(-(1 + steps));
   }
 }
 
-window.addEventListener('popstate', () => { if (overlay) closeOverlay({ fromPop: true }); });
+window.addEventListener('popstate', () => {
+  if (!overlay) return;
+  if (overlay.steps.length) overlay.steps.pop()();
+  else closeOverlay({ fromPop: true });
+});
 
 export function openSheet(html, onMount) {
   const backdrop = document.createElement('div');

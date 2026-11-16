@@ -7,7 +7,7 @@
 
 import * as db from './db.js';
 import { TAG_PALETTE, OLD_TAG_COLORS } from './settings.js';
-import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay } from './ui.js';
+import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, replaceHash } from './ui.js';
 import { openFind } from './find.js';
 import { isSingleWord } from './dictionary.js';
 
@@ -737,6 +737,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
   } else {
     app.innerHTML = `<main class="page">
     <div class="row-head">
+      <a class="icon-btn notes-back" href="#/" data-back aria-label="Back">${I.back}</a>
       <h1 class="page-title">Notes</h1>
       <button type="button" class="icon-btn" data-nt="search" aria-label="Search notes" aria-expanded="${st.searchOpen}">${I.search}</button>
       <button type="button" class="icon-btn" data-nt="tags" aria-label="Manage tags">${I.tag}</button>
@@ -869,7 +870,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
       return;
     }
     if (act?.dataset.nt === 'tags') {
-      if (fixed) location.replace(`#/series/${fixed.seriesId}/tags`);
+      if (fixed) replaceHash(`#/series/${fixed.seriesId}/tags`);
       else openTagManager(rerender, one?.id ?? null);
       return;
     }
@@ -1201,30 +1202,58 @@ function forget(key) {
   for (const [id, keys] of keepShown) if (key === '*' || keys.includes(key)) keepShown.delete(id);
 }
 
-/** The "Notes in the text" panel. noteList: this chapter's notes. onChange: redraw the marks. */
-export async function openVisibility({ seriesId, noteList, onChange }) {
+let visTab = 'notes';
+/**
+ * The reader's "Show in text" panel. noteList: this chapter's notes. onChange: redraw the text.
+ * codex (optional): { rooms: [{ id, name, color, icon (svg), count }], hidden: () => Set, setHidden(Set), off: bool }
+ *   — a second tab with one switch per Codex room.
+ */
+export async function openVisibility({ seriesId, noteList, onChange, codex = null }) {
   const tags = tagsFor(await db.getAllTags(), seriesId).own.sort((a, b) => (a.order ?? a.id) - (b.order ?? b.id));
   const inText = noteList.filter(n => n.sp != null);
   const count = id => inText.filter(n => (id === 'hl' ? !n.tagIds?.length : n.tagIds?.includes(id))).length;
-  const html = () => {
+  if (!codex) visTab = 'notes';
+  const row = (attr, key, dot, name, sub, on) => `
+    <label class="vis-row${on ? '' : ' is-off'}">${dot}
+      <span class="txt"><b>${esc(name)}</b><small>${sub}</small></span>
+      <input type="checkbox" role="switch" ${attr}="${key}" ${on ? 'checked' : ''}></label>`;
+  const notesHtml = () => {
     const h = hiddenIn(seriesId);
-    const row = (key, dot, name, on) => `
-      <label class="vis-row${on ? '' : ' is-off'}">${dot}
-        <span class="txt"><b>${esc(name)}</b><small>${plural(count(key === 'hl' ? 'hl' : Number(key)), 'note')} in this chapter</small></span>
-        <input type="checkbox" role="switch" data-vis="${key}" ${on ? 'checked' : ''}></label>`;
-    return `
-      <div class="snd-head"><h2>Notes in the text</h2>
-        <span class="vis-all"><button type="button" class="chip" data-vis-all="on">All on</button><button type="button" class="chip" data-vis-all="off">All off</button></span></div>
-      <div class="vis-list">
-        ${tags.map(t => row(String(t.id), `<i class="vis-dot" style="background:${tagColor(t.color)}"></i>`, t.name, !h.tags.has(t.id))).join('')}
-        ${row('hl', '<i class="vis-dot is-hl"></i>', tags.length ? 'Highlights & untagged' : 'All notes and highlights', !h.highlights)}
+    const sub = key => `${plural(count(key === 'hl' ? 'hl' : Number(key)), 'note')} in this chapter`;
+    return `<div class="vis-list">
+        ${tags.map(t => row('data-vis', String(t.id), `<i class="vis-dot" style="background:${tagColor(t.color)}"></i>`, t.name, sub(String(t.id)), !h.tags.has(t.id))).join('')}
+        ${row('data-vis', 'hl', '<i class="vis-dot is-hl"></i>', tags.length ? 'Highlights & untagged' : 'All notes and highlights', sub('hl'), !h.highlights)}
       </div>
       <p class="hint" style="margin:0">Remembered for this series. Hidden notes are still there — this only clears the text. A note you add under a hidden tag stays visible until you switch that tag again.</p>`;
   };
+  const codexHtml = () => {
+    const h = codex.hidden();
+    return `<div class="vis-list">
+        ${codex.rooms.map(r => row('data-room', r.id, `<span class="vis-room" style="--cx:${tagColor(r.color)}">${r.icon}</span>`, r.name,
+          r.count ? `${plural(r.count, 'name')} in this chapter` : 'none in this chapter', !h.has(r.id))).join('')}
+      </div>
+      <p class="hint" style="margin:0">${codex.off ? 'Codex names are switched off in Settings, so none are marked right now. ' : ''}A room that’s off stops marking its names in the text. Entries stay in the Codex. Remembered for this series.</p>`;
+  };
+  const html = () => `
+    <div class="snd-head"><h2>Show in text</h2>
+      <span class="vis-all"><button type="button" class="chip" data-vis-all="on">All on</button><button type="button" class="chip" data-vis-all="off">All off</button></span></div>
+    ${codex ? `<div class="vis-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected="${visTab === 'notes'}" data-vis-tab="notes">Notes${anyHidden(seriesId) ? '<i></i>' : ''}</button>
+      <button type="button" role="tab" aria-selected="${visTab === 'codex'}" data-vis-tab="codex">Codex${codex.hidden().size ? '<i></i>' : ''}</button></div>` : ''}
+    ${visTab === 'codex' && codex ? codexHtml() : notesHtml()}`;
   openSheet('<div class="vis-box"></div>', sheet => {
     const box = sheet.querySelector('.vis-box');
     box.innerHTML = html();
     box.addEventListener('change', e => {
+      const room = e.target.dataset.room;
+      if (room != null) {
+        const h = codex.hidden();
+        if (e.target.checked) h.delete(room); else h.add(room);
+        codex.setHidden(h);
+        box.innerHTML = html();
+        onChange?.();
+        return;
+      }
       const key = e.target.dataset.vis;
       if (key == null) return;
       const h = hiddenIn(seriesId);
@@ -1236,11 +1265,17 @@ export async function openVisibility({ seriesId, noteList, onChange }) {
       onChange?.();
     });
     box.addEventListener('click', e => {
+      const tab = e.target.closest('[data-vis-tab]');
+      if (tab) { visTab = tab.dataset.visTab; box.innerHTML = html(); return; }
       const b = e.target.closest('[data-vis-all]');
       if (!b) return;
       const off = b.dataset.visAll === 'off';
-      saveHidden(seriesId, { tags: new Set(off ? tags.map(t => t.id) : []), highlights: off });
-      forget('*');
+      if (visTab === 'codex' && codex) {
+        codex.setHidden(new Set(off ? codex.rooms.map(r => r.id) : []));
+      } else {
+        saveHidden(seriesId, { tags: new Set(off ? tags.map(t => t.id) : []), highlights: off });
+        forget('*');
+      }
       box.innerHTML = html();
       onChange?.();
     });

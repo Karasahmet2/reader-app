@@ -16,7 +16,7 @@
 //     fields[linkField] = [{ id, label?, since }]              (older entries: ids or { id, label })
 
 import * as db from './db.js';
-import { esc, I, svg, plural, fmtNum, toast, openSheet, closeOverlay } from './ui.js';
+import { esc, I, svg, plural, fmtNum, toast, openSheet, closeOverlay, goBack, pushOverlayStep, popOverlayStep } from './ui.js';
 import { tagColor, TAG_COLORS } from './notes.js';
 import { openFind } from './find.js';
 import { downloadBlob } from './backup.js';
@@ -48,7 +48,6 @@ export const CODEX_ICON = svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3
 const CLOCK = svg('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>', 13, 2);
 const LOCK = svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', 18);
 const X = svg('<path d="M6 6l12 12M18 6L6 18"/>', 12, 2.4);
-const MINUS = svg('<path d="M5 12h14"/>', 16, 2.2);
 const PLUS = svg('<path d="M12 5v14M5 12h14"/>', 16, 2.2);
 
 const link = (id, label, to, more = {}) => ({ id, label, kind: 'link', to: [].concat(to), multiple: true, ...more });
@@ -253,6 +252,8 @@ const OTHER = { id: '_other', name: 'Other', plural: 'Other entries', color: 'si
 const typeIn = (schema, e) => schema?.map.get(e?.type) || OTHER;
 const colorIn = (schema, e) => tagColor(typeIn(schema, e).color);
 const iconOf = t => ICONS[t.icon] || ICONS.star;
+/** A room's icon as svg markup. */
+export const roomIcon = (t, size = 16) => svg(iconOf(t), size, 2);
 
 /* ------------------------------------------------------------------ chapter-aware values */
 
@@ -269,8 +270,16 @@ export function textValues(entry, fid) {
 export function linkValues(entry, fid) {
   const v = entry.fields?.[fid];
   if (!Array.isArray(v)) return [];
-  return v.map(x => (typeof x === 'object' ? { id: x.id, label: x.label || '', since: sinceOf(x) } : { id: x, label: '', since: 0 }));
+  return v.map(x => (typeof x === 'object'
+    ? { id: x.id, label: x.label || '', since: sinceOf(x), until: Number.isFinite(x?.until) ? x.until : null }
+    : { id: x, label: '', since: 0, until: null }));
 }
+/** A connection as of a chapter: 'later' (not learned yet), 'now', or 'past' (ended before). */
+export function linkState(x, asOf) {
+  if (x.since > asOf) return 'later';
+  return x.until != null && asOf > x.until ? 'past' : 'now';
+}
+const spanText = (a, b) => (b == null ? `Ch. ${fmtNum(a || 1)}` : `Ch. ${fmtNum(a || 1)}–${fmtNum(b)}`);
 /** The text value true at a chapter (or ''), and how many later ones are hidden. */
 function textAt(entry, fid, asOf) {
   const vals = textValues(entry, fid);
@@ -287,6 +296,33 @@ export async function progressOf(seriesId) {
   for (const c of chapters) if (c.read) max = Math.max(max, c.number);
   for (const p of progress) if (ids.has(p.chapterId)) max = Math.max(max, ids.get(p.chapterId));
   return max || chapters[0]?.number || 0;
+}
+
+/* "Viewing as of" is one choice per series: it stays while you move between entries. */
+const VIEW_KEY = 'reader-codex-asof';
+function readViewAs() { try { return JSON.parse(sessionStorage.getItem(VIEW_KEY)) || {}; } catch { return {}; } }
+export function getViewAs(seriesId) { const v = readViewAs()[seriesId]; return Number.isFinite(v) ? v : null; }
+export function setViewAs(seriesId, chapter) {
+  const all = readViewAs();
+  if (chapter == null) delete all[seriesId]; else all[seriesId] = chapter;
+  try { sessionStorage.setItem(VIEW_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+}
+/** The chapter the Codex pages show things as of. */
+async function codexAsOf(seriesId, schema) {
+  if (!schema?.hideLater) return Infinity;
+  return getViewAs(seriesId) ?? await progressOf(seriesId);
+}
+
+/* Rooms whose names are switched off in the reader ("Show in text" → Codex), per series. */
+const ROOMS_KEY = 'reader-hidden-rooms';
+export function hiddenRooms(seriesId) {
+  try { return new Set(JSON.parse(localStorage.getItem(ROOMS_KEY))?.[seriesId] || []); } catch { return new Set(); }
+}
+export function setHiddenRooms(seriesId, set) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ROOMS_KEY)) || {}; } catch { /* fresh */ }
+  if (set.size) all[seriesId] = [...set]; else delete all[seriesId];
+  try { localStorage.setItem(ROOMS_KEY, JSON.stringify(all)); } catch { /* private mode */ }
 }
 
 /** Entries you know about at a chapter (all of them when hiding is off). */
@@ -320,7 +356,7 @@ function summary(schema, e, all, asOf) {
   }
   for (const f of t.fields) {
     if (f.kind !== 'link') continue;
-    const names = linkValues(e, f.id).filter(x => x.since <= asOf).map(x => map.get(x.id))
+    const names = linkValues(e, f.id).filter(x => linkState(x, asOf) === 'now').map(x => map.get(x.id))
       .filter(x => x && (!schema.hideLater || visible(x, asOf))).map(x => x.name);
     if (names.length) return `${f.label} ${names.slice(0, 2).join(', ')}`;
   }
@@ -519,7 +555,8 @@ export async function renderCodexTab(root, seriesId) {
       <button type="button" class="btn" data-cx="guide">${I.fileSm} Codex format guide (for an agent)</button>
     </div></div>`;
   } else {
-    const asOf = await progressOf(seriesId);
+    const progress = await progressOf(seriesId);
+    const asOf = await codexAsOf(seriesId, schema);
     const shown = knownAt(entries, schema, asOf);
     const hidden = entries.length - shown.length;
     const rooms = [...schema.types];
@@ -536,7 +573,8 @@ export async function renderCodexTab(root, seriesId) {
       </section>`;
     root.innerHTML = `<div class="codex-tab">
       <div class="list-meta">
-        <span>${plural(shown.length, 'entry', 'entries')}${schema.hideLater ? ` · as of Ch. ${fmtNum(asOf)}` : ''}</span>
+        <span>${plural(shown.length, 'entry', 'entries')}${schema.hideLater ? ` · as of Ch. ${fmtNum(asOf)}` : ''}${schema.hideLater && asOf !== progress
+          ? ` · <button type="button" class="link-btn" data-cx="progress">My progress</button>` : ''}</span>
         <button type="button" class="icon-btn" data-cx="menu" aria-label="Codex options">${I.dots}</button>
       </div>
       ${rooms.map(t => section(t, shown.filter(e => e.type === t.id))).join('')}
@@ -557,6 +595,7 @@ export async function renderCodexTab(root, seriesId) {
     if (b.dataset.cx === 'preset') openPresets(seriesId, redraw);
     if (b.dataset.cx === 'guide') openGuide();
     if (b.dataset.cx === 'menu') openCodexMenu(seriesId, schema, entries, redraw);
+    if (b.dataset.cx === 'progress') { setViewAs(seriesId, null); redraw(); }
   });
 }
 
@@ -610,7 +649,29 @@ async function openCodexMenu(seriesId, schema, entries, redraw) {
 
 /* ------------------------------------------------------------------ entry page (#/codex/ID) */
 
-const viewAs = new Map(); // entry id → chapter chosen in "Viewing as of"
+const openDrawers = new Set(); // "entryId:fieldId:targetId" rows whose ▾ is open
+const CHEV = svg('<path d="M6 9l6 6 6-6"/>', 18, 2);
+const PEN = svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>', 15, 1.9);
+
+/** One connection row: the name goes to that entry, the ▾ opens its details. */
+function linkRow(schema, target, x, key, { past = false, detail = '', editable = null } = {}) {
+  const open = openDrawers.has(key);
+  const desc = x.label ? `<div class="cx-dw-desc"><small>Description</small><span>${esc(x.label)}</span></div>` : '';
+  const when = x.until != null
+    ? `${x.since ? `True from Ch. ${fmtNum(x.since)}` : 'From the start'} · last true in Ch. ${fmtNum(x.until)}`
+    : `${x.since ? `True from Ch. ${fmtNum(x.since)}` : 'From the start'} · still true`;
+  return `<div class="cx-lrow${past ? ' is-past' : ''}${open ? ' is-open' : ''}">
+    <div class="cx-lhead">
+      <a class="cx-lname" href="#/codex/${target.id}">${avatarIn(schema, target, 30)}<span>${esc(target.name)}</span>
+        ${past ? `<em>${spanText(x.since, x.until)}</em>` : ''}</a>
+      <button type="button" class="cx-chev" data-drawer="${key}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} details">${CHEV}</button>
+    </div>
+    ${open ? `<div class="cx-drawer">${detail}${desc}
+      <div class="cx-dw-when">${CLOCK}<span>${when}</span>
+        ${editable ? `<button type="button" class="chip" data-cxa="edit-link" data-f="${esc(editable.fid)}" data-i="${editable.i}">${PEN} Edit</button>` : ''}</div>
+    </div>` : ''}
+  </div>`;
+}
 
 export async function renderEntryPage(app, id) {
   const entry = await db.getCodexEntry(id);
@@ -623,8 +684,7 @@ export async function renderEntryPage(app, id) {
     db.getCodexOfSeries(entry.seriesId), db.getAllNotes(), db.getChaptersOfSeries(entry.seriesId), progressOf(entry.seriesId),
   ]);
   const schema = await schemaOf(entry.seriesId, all);
-  const series = schema?.series;
-  const asOf = schema?.hideLater ? (viewAs.get(id) ?? progress) : Infinity;
+  const asOf = await codexAsOf(entry.seriesId, schema);
   const map = byId(all);
   const t = typeIn(schema, entry);
   const names = [entry.name, ...(entry.aliases || [])].filter(Boolean).map(n => n.toLowerCase());
@@ -633,18 +693,28 @@ export async function renderEntryPage(app, id) {
 
   const fieldsHtml = t.fields.map(f => {
     if (f.kind !== 'link') {
-      const { value, history, later } = textAt(entry, f.id, asOf);
-      hiddenCount += later;
-      if (!value && !history.length) return '';
-      return fieldBlock(f.label, `<div class="cx-history">
-        ${history.map(h => `<div class="is-old">${chTag(h.since)}<span>${esc(h.v)}</span></div>`).join('')}
-        ${value ? `<div>${chTag(textValues(entry, f.id).filter(x => x.since <= asOf).pop()?.since)}<span class="${f.kind === 'longtext' ? 'cx-about' : ''}">${esc(value)}</span></div>` : ''}
-      </div>`);
+      const vals = textValues(entry, f.id);
+      const known = vals.filter(x => x.since <= asOf);
+      hiddenCount += vals.length - known.length;
+      if (!known.length || (known.length === 1 && !known[0].v)) return '';
+      const cur = known[known.length - 1];
+      const older = known.slice(0, -1).reverse();
+      return card(f.label, `
+        ${cur.v ? `<div class="cx-vrow"><span class="${f.kind === 'longtext' ? 'cx-about' : ''}">${esc(cur.v)}</span>${chTag(cur.since)}</div>` : ''}
+        ${older.map((h, i) => {
+          const next = known[known.length - 2 - i + 1];
+          return `<div class="cx-vrow is-old"><span>${esc(h.v || '(empty)')}</span><em>${spanText(h.since, next ? next.since - 1 : null)}</em></div>`;
+        }).join('')}`);
     }
-    const items = linkValues(entry, f.id).filter(x => map.has(x.id));
-    const now = items.filter(x => x.since <= asOf && seen(map.get(x.id)));
-    hiddenCount += items.length - now.length;
-    return now.length ? fieldBlock(f.label, now.map(x => `<span class="cx-linkrow">${linkChip(schema, map.get(x.id), x.label)}${chTag(x.since)}</span>`).join('')) : '';
+    const items = linkValues(entry, f.id).map((x, i) => ({ ...x, i })).filter(x => map.has(x.id));
+    const ok = items.filter(x => seen(map.get(x.id)) || !schema?.hideLater);
+    const now = ok.filter(x => linkState(x, asOf) === 'now');
+    const past = ok.filter(x => linkState(x, asOf) === 'past');
+    hiddenCount += items.length - now.length - past.length;
+    if (!now.length && !past.length) return '';
+    const row = (x, isPast) => linkRow(schema, map.get(x.id), x, `${entry.id}:${f.id}:${x.id}`, { past: isPast, editable: { fid: f.id, i: x.i } });
+    return card(f.label, `${now.map(x => row(x, false)).join('')}
+      ${past.length ? `<div class="cx-past-h">Past</div>${past.map(x => row(x, true)).join('')}` : ''}`);
   }).join('');
 
   // Other entries that link here, as of the chosen chapter.
@@ -653,8 +723,8 @@ export async function renderEntryPage(app, id) {
     if (other.id === entry.id || !seen(other)) continue;
     for (const f of typeIn(schema, other).fields) {
       if (f.kind !== 'link') continue;
-      const x = linkValues(other, f.id).find(y => y.id === entry.id && y.since <= asOf);
-      if (x) back.push({ other, label: x.label || f.label });
+      const x = linkValues(other, f.id).find(y => y.id === entry.id && linkState(y, asOf) === 'now');
+      if (x) back.push({ other, f, x });
     }
   }
   const linkedNotes = notesOf.filter(n => n.seriesId === entry.seriesId
@@ -664,21 +734,25 @@ export async function renderEntryPage(app, id) {
   app.innerHTML = `<main class="page cx-page" style="--cx:${colorIn(schema, entry)}">
     <div class="cx-wash" aria-hidden="true"></div>
     <div class="row-head">
-      <a class="icon-btn" href="#/series/${entry.seriesId}/codex" aria-label="Back to ${esc(series?.name || 'series')}">${I.back}</a>
+      <a class="icon-btn" href="#/series/${entry.seriesId}/codex" data-back aria-label="Back">${I.back}</a>
       <button type="button" class="chip" data-cxa="edit">${I.pencilSm} Edit</button>
     </div>
     <div class="cx-hero">${avatarIn(schema, entry, 64)}
       <div class="txt"><h1>${esc(entry.name)}</h1>
         <small>${esc(t.name)}${entry.since ? ` · known from Ch. ${fmtNum(entry.since)}` : ''} · <span id="cx-seen"></span></small></div>
     </div>
-    ${schema?.hideLater ? `<label class="cx-viewas">${svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', 18)}
-      <span>Viewing as of</span>
-      <select data-viewas>${chapters.map(c => `<option value="${c.number}"${c.number === asOf ? ' selected' : ''}>Ch. ${fmtNum(c.number)}${c.number === progress ? ' · your progress' : ''}</option>`).join('')}</select></label>` : ''}
+    ${schema?.hideLater ? `<div class="cx-viewas">
+      <div class="cx-va-row">${svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', 18)}
+        <span>Viewing as of</span>
+        <button type="button" class="cx-chbtn" data-cxa="viewas">Ch. ${fmtNum(asOf)}${asOf === progress ? ' · your progress' : ''}${CHEV}</button></div>
+      <div class="cx-va-sub"><span>Same for every entry you open</span>${asOf !== progress ? '<button type="button" class="link-btn" data-cxa="progress">Back to my progress</button>' : ''}</div>
+    </div>` : ''}
     ${!known ? `<div class="cx-hidden">${LOCK}<span>You learn about ${esc(entry.name)} in Ch. ${fmtNum(entry.since)}.</span></div>` : ''}
-    ${entry.aliases?.length ? fieldBlock('Also called', entry.aliases.map(a => `<span>${esc(a)}</span>`).join('<span class="cx-dot">·</span>')) : ''}
+    ${entry.aliases?.length ? card('Also called', entry.aliases.map(a => `<div class="cx-vrow"><span>${esc(a)}</span></div>`).join('')) : ''}
     ${fieldsHtml}
-    ${entry.about ? fieldBlock('About', `<p class="cx-about">${esc(entry.about)}</p>`) : ''}
-    ${back.length ? fieldBlock('Linked from', back.map(b => linkChip(schema, b.other, b.label)).join('')) : ''}
+    ${entry.about ? card('About', `<p class="cx-about cx-pad">${esc(entry.about)}</p>`) : ''}
+    ${back.length ? card('Linked from', back.map(b => linkRow(schema, b.other, b.x, `${entry.id}:from:${b.other.id}:${b.f.id}`,
+      { detail: `<div class="cx-dw-desc"><small>As</small><span>${esc(b.other.name)}’s ${esc(b.f.label.toLowerCase())}</span></div>` })).join('')) : ''}
     ${hiddenCount ? `<div class="cx-hidden">${LOCK}<span>${plural(hiddenCount, 'detail')} from later chapters ${hiddenCount === 1 ? 'is' : 'are'} hidden.</span></div>` : ''}
     ${linkedNotes.length ? `<section class="cx-field"><h3>Notes that mention ${esc(entry.name)} · ${linkedNotes.length}</h3>
       <div class="cx-notes">${linkedNotes.slice(0, 20).map(n => `
@@ -689,21 +763,35 @@ export async function renderEntryPage(app, id) {
   </main>`;
 
   const main = app.querySelector('main');
-  main.querySelector('[data-viewas]')?.addEventListener('change', e => {
-    viewAs.set(id, Number(e.target.value));
-    renderEntryPage(app, id);
-  });
+  const redraw = () => { const y = window.scrollY; renderEntryPage(app, id).then(() => window.scrollTo(0, y)); };
   main.addEventListener('click', e => {
+    const dw = e.target.closest('[data-drawer]');
+    if (dw) {
+      const k = dw.dataset.drawer;
+      if (openDrawers.has(k)) openDrawers.delete(k); else openDrawers.add(k);
+      redraw();
+      return;
+    }
     const b = e.target.closest('[data-cxa]');
     if (!b) return;
-    if (b.dataset.cxa === 'edit') {
-      openEntryEditor({
-        seriesId: entry.seriesId, entry, ctx: Number.isFinite(asOf) ? asOf : progress,
-        onSaved: () => renderEntryPage(app, id),
-        onDeleted: () => { location.hash = `#/series/${entry.seriesId}/codex`; },
+    const editor = extra => openEntryEditor({
+      seriesId: entry.seriesId, entry, ctx: Number.isFinite(asOf) ? asOf : progress,
+      onSaved: redraw,
+      onDeleted: () => goBack(`#/series/${entry.seriesId}/codex`),
+      ...extra,
+    });
+    if (b.dataset.cxa === 'edit') editor();
+    if (b.dataset.cxa === 'edit-link') editor({ start: { kind: 'link', fid: b.dataset.f, i: Number(b.dataset.i) } });
+    if (b.dataset.cxa === 'find') openFind({ term: entry.name, chapterId: null, seriesId: entry.seriesId });
+    if (b.dataset.cxa === 'progress') { setViewAs(entry.seriesId, null); redraw(); }
+    if (b.dataset.cxa === 'viewas') {
+      openChapterPicker({
+        title: 'Viewing as of', chapters, value: asOf,
+        sub: `${schema?.series?.name || ''} · things you learned later stay hidden`,
+        quick: [{ label: 'My progress', n: progress }],
+        onPick: n => { setViewAs(entry.seriesId, n === progress ? null : n); redraw(); },
       });
     }
-    if (b.dataset.cxa === 'find') openFind({ term: entry.name, chapterId: null, seriesId: entry.seriesId });
   });
 
   firstSeen(entry).then(info => {
@@ -712,8 +800,60 @@ export async function renderEntryPage(app, id) {
   });
 }
 
-function fieldBlock(label, inner) {
-  return `<section class="cx-field"><h3>${esc(label)}</h3><div class="cx-vals">${inner}</div></section>`;
+function card(label, inner) {
+  return `<section class="cx-field"><h3>${esc(label)}</h3><div class="cx-card">${inner}</div></section>`;
+}
+
+/* ------------------------------------------------------------------ chapter picker */
+
+/** Picker HTML: type a number, quick buttons, or the list. chapters: [{number, title}]. */
+function chapterPickHtml({ title, sub = '', value, chapters, quick = [] }) {
+  return `<div class="cp">
+    <div class="cp-head"><h2>${esc(title)}</h2><small>${esc(sub || `${plural(chapters.length, 'chapter')}`)}</small></div>
+    <form class="cp-type" data-cp-form>
+      <label for="cp-num">Chapter</label>
+      <input id="cp-num" class="text-input" inputmode="decimal" enterkeyhint="go" value="${Number.isFinite(value) ? fmtNum(value) : ''}" autocomplete="off">
+      <button type="submit" class="btn btn-accent">Use</button>
+    </form>
+    ${quick.length ? `<div class="cp-quick">${quick.map(q => `<button type="button" class="btn" data-cp="${q.n}"><b>${esc(q.label)}</b><small>Ch. ${fmtNum(q.n)}</small></button>`).join('')}</div>` : ''}
+    <div class="cp-list">${chapters.map(c => `<button type="button" data-cp="${c.number}"${c.number === value ? ' aria-pressed="true"' : ''}>
+      <b>Ch. ${fmtNum(c.number)}</b><span>${esc(c.title || '')}</span>${c.number === value ? svg('<path d="M5 12l5 5 9-10"/>', 18, 2.2) : ''}</button>`).join('')}</div>
+  </div>`;
+}
+/** The chapter number that a click or the typed box chose, or null. */
+function chapterPicked(e, root, chapters) {
+  const b = e.target.closest('[data-cp]');
+  if (b) return Number(b.dataset.cp);
+  if (e.type === 'submit' && e.target.closest('[data-cp-form]')) {
+    e.preventDefault();
+    const n = Number(String(root.querySelector('#cp-num').value).replace(',', '.'));
+    if (!Number.isFinite(n) || !chapters.length) { toast('Type a chapter number'); return null; }
+    const exact = chapters.find(c => c.number === n);
+    if (exact) return n;
+    const near = chapters.reduce((a, c) => (Math.abs(c.number - n) < Math.abs(a.number - n) ? c : a));
+    toast(`No Ch. ${fmtNum(n)} — using Ch. ${fmtNum(near.number)}`);
+    return near.number;
+  }
+  return null;
+}
+function showPicked(root) {
+  root.querySelector('.cp-list [aria-pressed="true"]')?.scrollIntoView({ block: 'center' });
+}
+/** Chapter picker as its own sheet. */
+export function openChapterPicker({ title, sub, chapters, value, quick = [], onPick }) {
+  const list = [...chapters].sort((a, b) => a.number - b.number);
+  openSheet(chapterPickHtml({ title, sub, value, chapters: list, quick }), sheet => {
+    sheet.classList.add('cp-sheet');
+    const pick = e => {
+      const n = chapterPicked(e, sheet, list);
+      if (n == null) return;
+      closeOverlay();
+      onPick(n);
+    };
+    sheet.addEventListener('click', pick);
+    sheet.addEventListener('submit', pick);
+    showPicked(sheet);
+  });
 }
 
 async function firstSeen(entry) {
@@ -737,92 +877,100 @@ async function firstSeen(entry) {
 
 /* ------------------------------------------------------------------ add / edit */
 
-/** Chapter numbers of a series, for the − / + chapter controls. */
-async function chapterNumbers(seriesId) {
-  const list = (await db.getChaptersOfSeries(seriesId)).map(c => c.number).sort((a, b) => a - b);
-  return list.length ? list : [1];
-}
-function step(nums, value, dir) {
-  const i = nums.findIndex(n => n >= value);
-  const at = i < 0 ? nums.length - 1 : (nums[i] === value ? i : (dir > 0 ? i - 1 : i));
-  return nums[Math.min(nums.length - 1, Math.max(0, at + dir))];
-}
-const stepper = (key, label, value) => `
-  <div class="cx-step"><span class="cx-step-ico">${CLOCK}</span><span class="cx-step-label">${label}</span>
-    <button type="button" data-step="${key}:-1" aria-label="Earlier chapter">${MINUS}</button>
-    <b>Ch. ${fmtNum(value)}</b>
-    <button type="button" data-step="${key}:1" aria-label="Later chapter">${PLUS}</button></div>`;
+const chBtn = (key, label, value, icon = CLOCK) => `
+  <div class="cx-step"><span class="cx-step-ico">${icon}</span><span class="cx-step-label">${label}</span>
+    <button type="button" class="cx-chbtn" data-chpick="${key}">Ch. ${fmtNum(value || 1)}${svg('<path d="M6 9l6 6 6-6"/>', 14, 2)}</button></div>`;
 
 /**
  * Open the entry editor.
  *  seriesId, entry (to edit) or name/type (new), ctx: the chapter you're at (reader chapter or progress),
+ *  start: open straight on one connection { kind: 'link', fid, i } (Done then saves),
  *  onSaved(entry), onDeleted()
  */
-export async function openEntryEditor({ seriesId, entry = null, name = '', type = null, ctx = null, onSaved, onDeleted }) {
+export async function openEntryEditor({ seriesId, entry = null, name = '', type = null, ctx = null, start = null, onSaved, onDeleted }) {
   let all = await db.getCodexOfSeries(seriesId);
   const schema = await schemaOf(seriesId, all);
   if (!schema) { openNoCodex(seriesId, () => openEntryEditor({ seriesId, entry, name, type, ctx, onSaved, onDeleted })); return; }
-  const nums = await chapterNumbers(seriesId);
-  const here = ctx ?? await progressOf(seriesId);
+  const chapters = (await db.getChaptersOfSeries(seriesId)).sort((a, b) => a.number - b.number);
+  const nums = chapters.length ? chapters.map(c => c.number) : [1];
+  const progress = await progressOf(seriesId);
+  const here = ctx ?? progress;
   const draft = entry ? structuredClone(entry) : {
     seriesId, type: schema.map.has(type) ? type : schema.types[0].id, name, aliases: [], since: here, fields: {}, about: '',
   };
   draft.fields ||= {};
   draft.since ??= 0;
   let changeAt = entry ? here : draft.since; // chapter for new values and connections
-  // Text values typed in this session: field id → string (saved as a value from `changeAt`).
-  const typed = {};
-  let picker = null; // { field, q, label, since }
+  const typed = {};     // field id → text typed for a new value (saved from `changeAt`)
+  const adding = new Set(); // text fields with the "New value" box open
+  let picker = null;    // inline "Link" search: { field, q, label, since }
   let confirmDelete = false;
+  const views = [];     // steps over the form: link / value / chapter
+  const quick = [{ label: 'This chapter', n: here }, ...(progress !== here ? [{ label: 'My progress', n: progress }] : [])];
 
   const tdef = () => schema.map.get(draft.type) || schema.types[0];
   const map = () => byId(all);
+  const fieldOf = fid => tdef().fields.find(f => f.id === fid);
 
+  /* ---- the form ---- */
   const textField = f => {
     const vals = textValues(draft, f.id);
-    const shownNow = vals.filter(v => v.since <= changeAt).pop(); // the value the box shows
-    const cur = typed[f.id] ?? (shownNow?.v || '');
-    const older = vals.filter(v => v !== shownNow);
-    const input = f.kind === 'longtext'
-      ? `<textarea class="text-area" rows="3" data-tf="${esc(f.id)}" placeholder="${esc(f.hint || '')}">${esc(cur)}</textarea>`
-      : `<input class="text-input" data-tf="${esc(f.id)}" value="${esc(cur)}" placeholder="${esc(f.hint || '')}" autocomplete="off">`;
-    return `<label class="cx-efield"><span class="label">${esc(f.label)}</span>${input}
-      ${entry && older.length ? `<div class="cx-hist">${older.map(v => `<span>${chTag(v.since)}${esc(v.v || '(cleared)')}
-        <button type="button" data-hist="${esc(f.id)}:${v.since}" aria-label="Remove this value">${X}</button></span>`).join('')}</div>` : ''}</label>`;
+    const box = (v = '') => (f.kind === 'longtext'
+      ? `<textarea class="text-area" rows="3" data-tf="${esc(f.id)}" placeholder="${esc(f.hint || '')}">${esc(v)}</textarea>`
+      : `<input class="text-input" data-tf="${esc(f.id)}" value="${esc(v)}" placeholder="${esc(f.hint || '')}" autocomplete="off">`);
+    if (!entry || !vals.length) {
+      const shownNow = textValues(draft, f.id).filter(v => v.since <= changeAt).pop();
+      return `<label class="cx-efield"><span class="label">${esc(f.label)}</span>${box(typed[f.id] ?? (shownNow?.v || ''))}</label>`;
+    }
+    return `<div class="cx-efield"><span class="label">${esc(f.label)}</span>
+      <div class="cx-erows">
+        ${[...vals].reverse().map((v, i) => `<button type="button" class="cx-erow${i ? ' is-old' : ''}" data-val="${esc(f.id)}:${v.since}">
+          <span class="txt"><b>${esc(v.v || '(empty)')}</b></span><em>Ch. ${fmtNum(v.since || 1)}</em>${PEN}</button>`).join('')}
+        ${adding.has(f.id) ? `<div class="cx-enew"><small>${vals.some(v => v.since === changeAt) ? `Replaces the Ch. ${fmtNum(changeAt)} value` : `New value from Ch. ${fmtNum(changeAt)}`}</small>${box(typed[f.id] ?? '')}</div>`
+          : `<button type="button" class="cx-eadd" data-newval="${esc(f.id)}">${I.plusSm} New value from Ch. ${fmtNum(changeAt)}</button>`}
+      </div></div>`;
   };
 
   const linkField = f => {
     const m = map();
-    const items = linkValues(draft, f.id).filter(x => m.has(x.id));
-    const chips = items.map(x => {
+    const items = linkValues(draft, f.id).map((x, i) => ({ ...x, i })).filter(x => m.has(x.id));
+    const rows = items.map(x => {
       const e = m.get(x.id);
-      return `<span class="cx-pill" style="--cx:${colorIn(schema, e)}">${svg(iconOf(typeIn(schema, e)), 14, 2)}${esc(e.name)}${x.label ? `<i>${esc(x.label)}</i>` : ''}${x.since ? `<em>Ch. ${fmtNum(x.since)}</em>` : ''}
-        <button type="button" data-unlink="${esc(f.id)}:${x.id}" aria-label="Remove ${esc(e.name)}">${X}</button></span>`;
+      const meta = [x.label, x.until != null ? `${spanText(x.since, x.until)} · ended` : `Ch. ${fmtNum(x.since || 1)} →`].filter(Boolean).join(' · ');
+      return `<button type="button" class="cx-erow is-link${x.until != null ? ' is-past' : ''}" data-link="${esc(f.id)}:${x.i}">
+        ${avatarIn(schema, e, 30)}<span class="txt"><b>${esc(e.name)}</b><small>${esc(meta)}</small></span>${PEN}</button>`;
     }).join('');
     const open = picker?.field === f.id;
+    const targets = f.to.map(id => schema.map.get(id)).filter(Boolean);
     let pickHtml = '';
     if (open) {
-      const q = picker.q.trim().toLowerCase();
-      const taken = new Set(items.map(x => x.id));
-      const options = sortByName(all.filter(e => f.to.includes(e.type) && e.id !== draft.id && !taken.has(e.id)
-        && (!q || [e.name, ...(e.aliases || [])].some(n => n.toLowerCase().includes(q))))).slice(0, 6);
-      const exact = all.some(e => f.to.includes(e.type) && e.name.toLowerCase() === q);
-      const targets = f.to.map(id => schema.map.get(id)).filter(Boolean);
       pickHtml = `<div class="cx-picker">
-        <input class="text-input" data-pick-q value="${esc(picker.q)}" placeholder="Search or name a new ${esc(targets.map(x => x.name.toLowerCase()).join(' / '))}" autocomplete="off">
-        <div class="cx-options">
-          ${options.map(e => `<button type="button" data-pick="${e.id}">${avatarIn(schema, e, 28)}${esc(e.name)}</button>`).join('')}
-          ${q && !exact ? targets.map(x => `<button type="button" data-pick-new="${esc(x.id)}">${I.plusSm} New ${esc(x.name.toLowerCase())} “${esc(picker.q.trim())}”</button>`).join('') : ''}
-          ${!options.length && !q ? `<span class="hint">Nothing to link yet — type a name to add one.</span>` : ''}
-        </div>
-        ${f.withLabel ? `<input class="text-input" data-pick-label value="${esc(picker.label)}" placeholder="${esc(f.labelHint || 'Relation, e.g. brother')}" autocomplete="off">` : ''}
-        ${stepper('link', 'True from', picker.since)}
+        ${searchHtml(f, picker.q, new Set(items.map(x => x.id)))}
+        ${f.withLabel ? `<input class="text-input" data-pick-label value="${esc(picker.label)}" placeholder="${esc(f.labelHint || 'Description, e.g. brother')}" autocomplete="off">` : ''}
+        ${chBtn('pick', 'True from', picker.since)}
       </div>`;
     }
     const full = !f.multiple && items.length >= 1;
     return `<div class="cx-efield"><span class="label">${esc(f.label)}</span>
-      <div class="cx-pills">${chips}<button type="button" class="cx-add" data-linkadd="${esc(f.id)}" aria-expanded="${open}">${I.plusSm} ${open ? 'Close' : full ? 'Change' : 'Link'}</button></div>
-      ${pickHtml}</div>`;
+      <div class="cx-erows">${rows}
+        <button type="button" class="cx-eadd" data-linkadd="${esc(f.id)}" aria-expanded="${open}">${open ? `${X} Close`
+          : `${I.plusSm} ${full ? 'Change' : `Link ${esc(targets.length === 1 ? `${/^[aeiou]/i.test(targets[0].name) ? 'an' : 'a'} ${targets[0].name.toLowerCase()}` : '')}`}`}</button>
+        ${pickHtml}</div></div>`;
+  };
+
+  /** Search list for choosing what a connection points to. */
+  const searchHtml = (f, q0, taken) => {
+    const q = q0.trim().toLowerCase();
+    const options = sortByName(all.filter(e => f.to.includes(e.type) && e.id !== draft.id && !taken.has(e.id)
+      && (!q || [e.name, ...(e.aliases || [])].some(n => n.toLowerCase().includes(q))))).slice(0, 6);
+    const exact = all.some(e => f.to.includes(e.type) && e.name.toLowerCase() === q);
+    const targets = f.to.map(id => schema.map.get(id)).filter(Boolean);
+    return `<input class="text-input" data-pick-q value="${esc(q0)}" placeholder="Search or name a new ${esc(targets.map(x => x.name.toLowerCase()).join(' / '))}" autocomplete="off">
+      <div class="cx-options">
+        ${options.map(e => `<button type="button" data-pick="${e.id}">${avatarIn(schema, e, 28)}${esc(e.name)}</button>`).join('')}
+        ${q && !exact ? targets.map(x => `<button type="button" data-pick-new="${esc(x.id)}">${I.plusSm} New ${esc(x.name.toLowerCase())} “${esc(q0.trim())}”</button>`).join('') : ''}
+        ${!options.length && !q ? `<span class="hint">Nothing to link yet — type a name to add one.</span>` : ''}
+      </div>`;
   };
 
   const formHtml = () => {
@@ -835,11 +983,11 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
           ${svg(iconOf(x), 18, 1.9)}<span>${esc(x.name)}</span></button>`).join('')}</div>` : ''}
       <label class="cx-efield"><span class="label">Name</span>
         <input class="text-input" data-f="name" value="${esc(draft.name)}" maxlength="80" autocomplete="off"></label>
-      ${stepper('known', 'Known from', draft.since || nums[0])}
+      ${chBtn('known', 'Known from', draft.since || nums[0])}
       <label class="cx-efield"><span class="label">Also called</span>
         <input class="text-input" data-f="aliases" value="${esc((draft.aliases || []).join(', '))}" placeholder="Other names, separated by commas" autocomplete="off"></label>
-      ${entry ? `<div class="cx-change">${stepper('change', 'New details from', changeAt)}
-        <small>Values you change and connections you add count from this chapter. The old ones stay as history.</small></div>` : ''}
+      ${entry ? `<div class="cx-change">${chBtn('change', 'New details from', changeAt, PLUS)}
+        <small>New values and new connections count from this chapter. Tap any row below to change it.</small></div>` : ''}
       ${t.fields.map(f => (f.kind === 'link' ? linkField(f) : textField(f))).join('')}
       <label class="cx-efield"><span class="label">About</span>
         <textarea class="text-area" data-f="about" rows="3" placeholder="Anything worth remembering…">${esc(draft.about || '')}</textarea></label>
@@ -851,29 +999,147 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       ${entry ? `<button type="button" class="btn cx-delete${confirmDelete ? ' is-confirm' : ''}" data-ed="delete">${I.trashSm} ${confirmDelete ? 'Tap again to delete' : 'Delete entry'}</button>` : ''}`;
   };
 
+  /* ---- step views ---- */
+  const linkViewHtml = v => {
+    const f = fieldOf(v.fid);
+    const w = v.w;
+    const target = map().get(w.id);
+    return `
+      <div class="cx-ed-head"><div class="txt"><h2>Edit connection</h2><small>${esc(draft.name || 'This entry')} · ${esc(f.label)}</small></div></div>
+      <div class="cx-efield"><span class="label">Linked to</span>
+        ${v.changing ? `<div class="cx-picker">${searchHtml(f, v.q || '', new Set(linkValues(draft, f.id).map(x => x.id).filter(id => id !== w.id)))}</div>`
+          : `<div class="cx-linked">${target ? `${avatarIn(schema, target, 28)}<b>${esc(target.name)}</b>` : '<b>—</b>'}
+            <button type="button" class="btn" data-lv="change">Change</button></div>`}</div>
+      ${f.withLabel || w.label ? `<label class="cx-efield"><span class="label">Description</span>
+        <input class="text-input" data-lv-label value="${esc(w.label || '')}" placeholder="${esc(f.labelHint || 'e.g. brother, master, rival')}" autocomplete="off"></label>` : ''}
+      ${chBtn('since', 'True from', w.since || nums[0])}
+      <div class="cx-step"><span class="cx-step-ico">${X}</span><span class="cx-step-label">Until</span>
+        <span class="cx-seg" role="radiogroup" aria-label="Until">
+          <button type="button" role="radio" aria-checked="${w.until == null}" data-lv="still">Still true</button>
+          <button type="button" role="radio" aria-checked="${w.until != null}" data-lv="ended">Ended</button></span></div>
+      ${w.until != null ? chBtn('until', 'Last true in', w.until, '') : ''}
+      <p class="hint" style="margin:0">${w.until != null
+        ? `Shows as a normal link from Ch. ${fmtNum(w.since || 1)} to Ch. ${fmtNum(w.until)}. After that it moves to “Past”, with its chapters.`
+        : `Shows from Ch. ${fmtNum(w.since || 1)} on. If it stops being true (someone leaves, dies, breaks up), choose Ended.`}</p>
+      <button type="button" class="btn cx-delete${v.confirm ? ' is-confirm' : ''}" data-lv="remove">${I.trashSm} ${v.confirm ? 'Tap again to remove' : 'Remove connection'}</button>
+      <div class="two-btns"><button type="button" class="btn" data-lv="cancel">Cancel</button>
+        <button type="button" class="btn btn-accent" data-lv="done">Done</button></div>`;
+  };
+  const valueViewHtml = v => {
+    const f = fieldOf(v.fid);
+    return `
+      <div class="cx-ed-head"><div class="txt"><h2>Edit ${esc(f.label)}</h2><small>${esc(draft.name || 'This entry')}</small></div></div>
+      <label class="cx-efield"><span class="label">Value</span>
+        ${f.kind === 'longtext' ? `<textarea class="text-area" rows="4" data-vv>${esc(v.w.v)}</textarea>`
+          : `<input class="text-input" data-vv value="${esc(v.w.v)}" autocomplete="off">`}</label>
+      ${chBtn('vsince', 'True from', v.w.since || nums[0])}
+      <button type="button" class="btn cx-delete${v.confirm ? ' is-confirm' : ''}" data-vw="remove">${I.trashSm} ${v.confirm ? 'Tap again to remove' : 'Remove this value'}</button>
+      <div class="two-btns"><button type="button" class="btn" data-vw="cancel">Cancel</button>
+        <button type="button" class="btn btn-accent" data-vw="done">Done</button></div>`;
+  };
+
   const sheet = openSheet('<div class="cx-editor"></div>', s => s.classList.add('cx-sheet'));
   const box = sheet.querySelector('.cx-editor');
-  const draw = (focusPicker = false) => {
-    const scroll = sheet.scrollTop;
-    box.innerHTML = formHtml();
-    sheet.scrollTop = scroll;
-    if (focusPicker) box.querySelector('[data-pick-q]')?.focus();
+  const top = () => views[views.length - 1] || null;
+  let lastView = null;   // the view drawn last time (keeps its scroll when redrawn)
+  let formScroll = null; // where the form was scrolled when a step opened
+  const draw = (focusSel = null) => {
+    const v = top();
+    const keep = sheet.scrollTop;
+    box.innerHTML = !v ? formHtml() : v.kind === 'link' ? linkViewHtml(v) : v.kind === 'value' ? valueViewHtml(v)
+      : chapterPickHtml({ title: v.title, value: v.value, chapters, quick, sub: v.sub });
+    if (!v) { sheet.scrollTop = formScroll ?? keep; formScroll = null; }
+    else sheet.scrollTop = v === lastView ? keep : 0;
+    if (v?.kind === 'chapter' && v !== lastView) showPicked(box);
+    lastView = v;
+    if (focusSel) {
+      const el = box.querySelector(focusSel);
+      el?.focus();
+      return el;
+    }
+    return null;
   };
+  let savedForm = null;
+  const pushView = v => {
+    if (!top()) savedForm = sheet.scrollTop;
+    views.push(v);
+    pushOverlayStep(() => {
+      views.pop();
+      if (!top()) formScroll = savedForm;
+      draw();
+    });
+    draw();
+  };
+  const popView = () => popOverlayStep();
+
+  /** Save the whole entry (Save button, or Done when opened straight on a connection). */
+  const saveEntry = async () => {
+    const nm = draft.name.replace(/\s+/g, ' ').trim();
+    if (!nm) { toast('Give it a name first'); return false; }
+    const clash = all.find(x => x.id !== draft.id && x.name.toLowerCase() === nm.toLowerCase());
+    if (clash) { toast(`“${clash.name}” is already in the Codex`); return false; }
+    // Typed text becomes the value from `changeAt` (replacing one from the same chapter).
+    for (const [fid, v] of Object.entries(typed)) {
+      const value = v.trim();
+      const vals = textValues(draft, fid);
+      if ((textAt(draft, fid, changeAt).value || '') === value) continue;
+      const rest = vals.filter(x => x.since !== changeAt);
+      if (value || rest.some(x => x.since < changeAt)) rest.push({ v: value, since: changeAt });
+      draft.fields[fid] = rest.sort((a, b) => a.since - b.since);
+    }
+    const saved = await db.putCodexEntry({ ...draft, name: nm });
+    toast(entry ? 'Entry saved' : 'Added to the Codex');
+    closeOverlay();
+    onSaved?.(saved);
+    return true;
+  };
+
+  /** Apply the "Edit connection" view to the draft. */
+  const applyLink = v => {
+    const list = linkValues(draft, v.fid);
+    if (v.w.until != null && v.w.until < (v.w.since || 0)) { toast('“Last true in” can’t be before “True from”'); return false; }
+    list[v.i] = { id: v.w.id, label: (v.w.label || '').trim(), since: v.w.since, ...(v.w.until != null ? { until: v.w.until } : {}) };
+    draft.fields[v.fid] = list.map(x => (x.until == null ? { id: x.id, label: x.label, since: x.since } : x));
+    return true;
+  };
+
   draw();
-  if (!draft.name) box.querySelector('[data-f="name"]').focus();
+  if (!draft.name) box.querySelector('[data-f="name"]')?.focus();
+  if (start?.kind === 'link') {
+    const x = linkValues(draft, start.fid)[start.i];
+    if (x) pushView({ kind: 'link', fid: start.fid, i: start.i, w: { ...x }, direct: true });
+  }
 
   const addLink = id => {
-    const f = tdef().fields.find(x => x.id === picker.field);
+    const f = fieldOf(picker.field);
     let list = linkValues(draft, f.id);
     if (!f.multiple) list = [];
     list.push({ id, label: (picker.label || '').trim(), since: picker.since });
-    draft.fields[f.id] = list;
+    draft.fields[f.id] = list.map(x => (x.until == null ? { id: x.id, label: x.label, since: x.since } : x));
     picker = null;
     draw();
+  };
+  const newEntry = async (typeId, nm, since) => {
+    const t = schema.map.get(typeId);
+    const made = await db.putCodexEntry({ seriesId, type: t.id, name: nm, aliases: [], since, fields: {}, about: '' });
+    all = [...all, made];
+    toast(`${t.name} “${made.name}” added`);
+    return made;
   };
 
   box.addEventListener('input', e => {
     const el = e.target;
+    const v = top();
+    if (v?.kind === 'link') {
+      if (el.dataset.lvLabel != null) v.w.label = el.value;
+      else if (el.dataset.pickQ != null) {
+        v.q = el.value;
+        const pos = el.selectionStart;
+        draw('[data-pick-q]')?.setSelectionRange(pos, pos);
+      }
+      return;
+    }
+    if (v?.kind === 'value') { if (el.dataset.vv != null) v.w.v = el.value; return; }
     if (el.dataset.f === 'name') draft.name = el.value;
     else if (el.dataset.f === 'aliases') draft.aliases = el.value.split(',').map(s => s.trim()).filter(Boolean);
     else if (el.dataset.f === 'about') draft.about = el.value;
@@ -882,54 +1148,108 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
     else if (el.dataset.pickQ != null) {
       picker.q = el.value;
       const pos = el.selectionStart;
-      draw(true);
-      box.querySelector('[data-pick-q]')?.setSelectionRange(pos, pos);
+      draw('[data-pick-q]')?.setSelectionRange(pos, pos);
     }
   });
 
-  box.addEventListener('click', async e => {
-    const st = e.target.closest('[data-step]');
-    if (st) {
-      const [key, dir] = st.dataset.step.split(':');
-      const d = Number(dir);
-      if (key === 'known') {
-        draft.since = step(nums, draft.since || nums[0], d);
-        if (!entry) changeAt = draft.since;
-      } else if (key === 'change') changeAt = step(nums, changeAt, d);
-      else if (key === 'link') picker.since = step(nums, picker.since, d);
-      draw(key === 'link');
+  const onChapter = (title, value, onPick, sub = '') => pushView({ kind: 'chapter', title, value, onPick, sub });
+
+  const handle = async e => {
+    const v = top();
+    /* chapter picker step */
+    if (v?.kind === 'chapter') {
+      const n = chapterPicked(e, box, chapters);
+      if (n == null) return;
+      v.onPick(n);
+      popView();
       return;
     }
+    if (e.type === 'submit') return;
+    const cp = e.target.closest('[data-chpick]');
+    if (cp) {
+      const key = cp.dataset.chpick;
+      if (key === 'known') onChapter('Known from', draft.since || nums[0], n => { draft.since = n; if (!entry) changeAt = n; }, 'The chapter where you first learn about it');
+      else if (key === 'change') onChapter('New details from', changeAt, n => { changeAt = n; }, 'New values and connections count from here');
+      else if (key === 'pick') onChapter('True from', picker.since, n => { picker.since = n; });
+      else if (key === 'since') onChapter('True from', v.w.since || nums[0], n => { v.w.since = n; if (v.w.until != null && v.w.until < n) v.w.until = n; });
+      else if (key === 'until') onChapter('Last true in', v.w.until, n => { v.w.until = n; }, 'The last chapter where this is still true');
+      else if (key === 'vsince') onChapter('True from', v.w.since || nums[0], n => { v.w.since = n; });
+      return;
+    }
+    /* edit-connection step */
+    if (v?.kind === 'link') {
+      const pick = e.target.closest('[data-pick]');
+      if (pick) { v.w.id = Number(pick.dataset.pick); v.changing = false; draw(); return; }
+      const pickNew = e.target.closest('[data-pick-new]');
+      if (pickNew) { const made = await newEntry(pickNew.dataset.pickNew, (v.q || '').trim(), v.w.since); v.w.id = made.id; v.changing = false; draw(); return; }
+      const b = e.target.closest('[data-lv]');
+      if (!b) return;
+      const act = b.dataset.lv;
+      if (act === 'change') { v.changing = true; v.q = ''; draw('[data-pick-q]'); }
+      if (act === 'still') { v.w.until = null; draw(); }
+      if (act === 'ended') { v.w.until = v.w.until ?? Math.max(v.w.since || nums[0], changeAt); draw(); }
+      if (act === 'cancel') { if (v.direct) closeOverlay(); else popView(); }
+      if (act === 'remove') {
+        if (!v.confirm) { v.confirm = true; draw(); return; }
+        draft.fields[v.fid] = linkValues(draft, v.fid).filter((_, i) => i !== v.i)
+          .map(x => (x.until == null ? { id: x.id, label: x.label, since: x.since } : x));
+        if (v.direct) await saveEntry(); else popView();
+      }
+      if (act === 'done') {
+        if (!applyLink(v)) return;
+        if (v.direct) await saveEntry(); else popView();
+      }
+      return;
+    }
+    /* edit-value step */
+    if (v?.kind === 'value') {
+      const b = e.target.closest('[data-vw]');
+      if (!b) return;
+      const act = b.dataset.vw;
+      if (act === 'cancel') popView();
+      if (act === 'remove') {
+        if (!v.confirm) { v.confirm = true; draw(); return; }
+        draft.fields[v.fid] = textValues(draft, v.fid).filter(x => x.since !== v.orig);
+        popView();
+      }
+      if (act === 'done') {
+        const rest = textValues(draft, v.fid).filter(x => x.since !== v.orig && x.since !== v.w.since);
+        rest.push({ v: v.w.v.trim(), since: v.w.since });
+        draft.fields[v.fid] = rest.sort((a, b) => a.since - b.since);
+        popView();
+      }
+      return;
+    }
+    /* the form */
     const ty = e.target.closest('[data-type]');
     if (ty) { draft.type = ty.dataset.type; picker = null; draw(); return; }
+    const lk = e.target.closest('[data-link]');
+    if (lk) {
+      const [fid, i] = lk.dataset.link.split(':');
+      const x = linkValues(draft, fid)[Number(i)];
+      if (x) pushView({ kind: 'link', fid, i: Number(i), w: { ...x } });
+      return;
+    }
+    const vl = e.target.closest('[data-val]');
+    if (vl) {
+      const [fid, since] = vl.dataset.val.split(':');
+      const x = textValues(draft, fid).find(y => y.since === Number(since));
+      if (x) pushView({ kind: 'value', fid, orig: x.since, w: { ...x } });
+      return;
+    }
+    const nv = e.target.closest('[data-newval]');
+    if (nv) { adding.add(nv.dataset.newval); draw(`[data-tf="${nv.dataset.newval}"]`); return; }
     const add = e.target.closest('[data-linkadd]');
     if (add) {
       picker = picker?.field === add.dataset.linkadd ? null : { field: add.dataset.linkadd, q: '', label: '', since: changeAt };
-      draw(!!picker);
-      return;
-    }
-    const un = e.target.closest('[data-unlink]');
-    if (un) {
-      const [fid, id] = un.dataset.unlink.split(':');
-      draft.fields[fid] = linkValues(draft, fid).filter(x => x.id !== Number(id));
-      draw();
-      return;
-    }
-    const hist = e.target.closest('[data-hist]');
-    if (hist) {
-      const [fid, since] = hist.dataset.hist.split(':');
-      draft.fields[fid] = textValues(draft, fid).filter(v => v.since !== Number(since));
-      draw();
+      draw(picker ? '[data-pick-q]' : null);
       return;
     }
     const pick = e.target.closest('[data-pick]');
     if (pick) { addLink(Number(pick.dataset.pick)); return; }
     const pickNew = e.target.closest('[data-pick-new]');
     if (pickNew) {
-      const t = schema.map.get(pickNew.dataset.pickNew);
-      const made = await db.putCodexEntry({ seriesId, type: t.id, name: picker.q.trim(), aliases: [], since: picker.since, fields: {}, about: '' });
-      all = [...all, made];
-      toast(`${t.name} “${made.name}” added`);
+      const made = await newEntry(pickNew.dataset.pickNew, picker.q.trim(), picker.since);
       addLink(made.id);
       return;
     }
@@ -945,25 +1265,11 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       return;
     }
     if (act.dataset.ed === 'save') {
-      const nm = draft.name.replace(/\s+/g, ' ').trim();
-      if (!nm) { toast('Give it a name first'); box.querySelector('[data-f="name"]').focus(); return; }
-      const clash = all.find(x => x.id !== draft.id && x.name.toLowerCase() === nm.toLowerCase());
-      if (clash) { toast(`“${clash.name}” is already in the Codex`); return; }
-      // Typed text becomes the value from `changeAt` (replacing one from the same chapter).
-      for (const [fid, v] of Object.entries(typed)) {
-        const value = v.trim();
-        const vals = textValues(draft, fid);
-        if ((textAt(draft, fid, changeAt).value || '') === value) continue;
-        const rest = vals.filter(x => x.since !== changeAt);
-        if (value || rest.some(x => x.since < changeAt)) rest.push({ v: value, since: changeAt });
-        draft.fields[fid] = rest.sort((a, b) => a.since - b.since);
-      }
-      const saved = await db.putCodexEntry({ ...draft, name: nm });
-      toast(entry ? 'Entry saved' : 'Added to the Codex');
-      closeOverlay();
-      onSaved?.(saved);
+      if (!(await saveEntry())) box.querySelector('[data-f="name"]')?.focus();
     }
-  });
+  };
+  box.addEventListener('click', handle);
+  box.addEventListener('submit', handle);
 }
 
 /* ------------------------------------------------------------------ reader: quick card and Codex tool */
@@ -993,6 +1299,7 @@ export async function openPeek(id, { asOf = Infinity, onNote, noteLabel = 'Add a
         const target = map.get(x.id);
         if (!target) continue;
         if (x.since > upTo || (target.since || 0) > upTo) { hidden++; continue; }
+        if (linkState(x, upTo) === 'past') continue;
         if (rows.length < 4) rows.push(`<div class="cx-peek-row"><span>${esc(x.label || f.label)}</span>${linkChip(schema, target)}</div>`);
       }
     }
@@ -1011,10 +1318,11 @@ export async function openPeek(id, { asOf = Infinity, onNote, noteLabel = 'Add a
   openSheet(`<div class="cx-peek">${build(limit)}</div>`, sheet => {
     sheet.addEventListener('click', e => {
       const a = e.target.closest('a.cx-link');
-      if (a) { e.preventDefault(); closeOverlay({ navTo: a.getAttribute('href') }); return; }
+      const fromReader = () => { if (Number.isFinite(asOf)) setViewAs(entry.seriesId, asOf); };
+      if (a) { e.preventDefault(); fromReader(); closeOverlay({ navTo: a.getAttribute('href') }); return; }
       const b = e.target.closest('[data-pk]');
       if (b?.dataset.pk === 'show') { sheet.querySelector('.cx-peek').innerHTML = build(Infinity); return; }
-      if (b?.dataset.pk === 'open') closeOverlay({ navTo: `#/codex/${entry.id}` });
+      if (b?.dataset.pk === 'open') { fromReader(); closeOverlay({ navTo: `#/codex/${entry.id}` }); }
       if (b?.dataset.pk === 'note') onNote(entry);
     });
   });
@@ -1055,7 +1363,12 @@ export async function openReaderCodex({ seriesId, chapterText, asOf, onChanged }
     });
     sheet.addEventListener('click', e => {
       const a = e.target.closest('a[href]');
-      if (a) { e.preventDefault(); closeOverlay({ navTo: a.getAttribute('href') }); return; }
+      if (a) {
+        e.preventDefault();
+        if (Number.isFinite(asOf) && a.getAttribute('href').startsWith('#/codex/')) setViewAs(seriesId, asOf);
+        closeOverlay({ navTo: a.getAttribute('href') });
+        return;
+      }
       if (e.target.closest('[data-rc="new"]')) openEntryEditor({ seriesId, ctx: asOf, onSaved: () => onChanged?.() });
     });
   });
