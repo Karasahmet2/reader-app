@@ -100,6 +100,9 @@ export const DEFAULTS = {
   libFilter: 'all',    // all | reading | waiting | finished
   // Reader
   showFooter: true,    // percent and time left at the bottom while reading
+  codexNames: true,    // dotted underline under Codex names in the reader
+  mwLearnersKey: '',   // Merriam-Webster Learner's Dictionary key (Define)
+  mwCollegiateKey: '', // Merriam-Webster Collegiate Dictionary key (Define)
   // Backup
   backupReminder: true,
   lastBackupAt: 0,

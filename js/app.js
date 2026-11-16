@@ -20,6 +20,7 @@ import * as backup from './backup.js';
 import * as find from './find.js';
 import * as sounds from './sounds.js';
 import * as dictionary from './dictionary.js';
+import * as codex from './codex.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -185,7 +186,7 @@ function nav(active) {
   return `<nav class="bottom-nav" aria-label="Main">
     ${link('library', '#/', 'Library', I.library)}
     ${link('import', '#/import', 'Import', I.import)}
-    ${link('notes', '#/notes', 'Notes', I.notes)}
+    ${link('sounds', '#/sounds', 'Sounds', sounds.HEADPHONES)}
     ${link('settings', '#/settings', 'Settings', I.settings)}
   </nav>`;
 }
@@ -216,10 +217,12 @@ async function route() {
   route.lastView = view;
   try {
     await loadCovers();
-    if (view === 'series' && id) await renderSeries(Number(id));
+    if (view === 'series' && id) await renderSeries(Number(id), sub);
+    else if (view === 'codex' && id) await codex.renderEntryPage(app, Number(id));
     else if (view === 'read' && id) await renderReader(Number(id), sub === 'note' ? Number(subId) : null, findJump);
     else if (view === 'import') await renderImport();
-    else if (view === 'notes') await notes.renderNotes(app, nav('notes'), s => cover(s, 'xs'), id ? Number(id) : null);
+    else if (view === 'notes') await notes.renderNotes(app, nav(''), s => cover(s, 'xs'), id ? Number(id) : null);
+    else if (view === 'sounds') await sounds.renderSoundsPage(app, nav('sounds'));
     else if (view === 'settings') await renderSettings();
     else if (view === 'backup') await renderBackup();
     else await renderLibrary();
@@ -329,7 +332,10 @@ async function renderLibrary() {
   app.innerHTML = `<main class="page">
     <div class="row-head">
       <h1 class="page-title">Library</h1>
-      <button type="button" class="icon-btn" data-action="toggle-search" aria-label="Search library" aria-expanded="${libSearchOpen}">${I.search}</button>
+      <span class="head-actions">
+        <a class="icon-btn" href="#/notes" aria-label="Notes from all series">${I.notes}</a>
+        <button type="button" class="icon-btn" data-action="toggle-search" aria-label="Search library" aria-expanded="${libSearchOpen}">${I.search}</button>
+      </span>
     </div>
     ${libSearchOpen ? `<label class="search-box">
       ${I.search}
@@ -453,11 +459,14 @@ function openSortSheet() {
 
 /* ------------------------------------------------------------------ series page */
 
-async function renderSeries(id) {
+async function renderSeries(id, tab = 'chapters') {
+  if (!['chapters', 'notes', 'codex'].includes(tab)) tab = 'chapters';
   const series = await db.getSeries(id);
   if (!series) throw new Error('This series no longer exists.');
   currentSeries = series;
-  const [chapters, progress] = await Promise.all([db.getChaptersOfSeries(id), db.getAllProgress()]);
+  const [chapters, progress, allNotes, entries] = await Promise.all([
+    db.getChaptersOfSeries(id), db.getAllProgress(), db.getAllNotes(), db.getCodexOfSeries(id)]);
+  const noteCount = allNotes.filter(n => n.seriesId === id).length;
   const ids = new Set(chapters.map(c => c.id));
   const prog = new Map(progress.filter(p => ids.has(p.chapterId)).map(p => [p.chapterId, p]));
 
@@ -527,7 +536,11 @@ async function renderSeries(id) {
       </div>
     </section>
     ${cta}
-    <section class="chapter-list" aria-label="Chapters">
+    <nav class="series-tabs" role="tablist" aria-label="Series sections">
+      ${[['chapters', 'Chapters', ''], ['notes', 'Notes', noteCount], ['codex', 'Codex', entries.length]].map(([k, label, n]) => `
+        <button type="button" role="tab" aria-selected="${tab === k}" data-action="series-tab" data-tab="${k}">${label}${n ? ` <span class="count">${n}</span>` : ''}</button>`).join('')}
+    </nav>
+    ${tab !== 'chapters' ? '<div id="series-tab"></div>' : `<section class="chapter-list" aria-label="Chapters">
       <div class="chapter-list-head">
         <p class="label" style="padding:0">Chapters</p>
         <div style="display:flex;gap:2px">
@@ -536,8 +549,11 @@ async function renderSeries(id) {
         </div>
       </div>
       ${rows || '<div class="empty" style="padding:24px"><span>No chapters yet.</span></div>'}
-    </section>
+    </section>`}
   </main>`;
+  const tabRoot = app.querySelector('#series-tab');
+  if (tab === 'notes') await notes.renderNotes(app, '', s => cover(s, 'xs'), null, { seriesId: id, root: tabRoot });
+  if (tab === 'codex') await codex.renderCodexTab(tabRoot, id);
 }
 
 /* ---------- series sheets ---------- */
@@ -558,7 +574,6 @@ function openSeriesMenu() {
       </div>
     </div>
     <div class="menu-list">
-      <button type="button" data-sa="notes">${I.tag}<span>Notes & tags</span></button>
       <button type="button" data-sa="rename">${I.pencil}<span>Rename series</span></button>
       <button type="button" data-sa="status">${I.status}<span>Status</span><em>${STATUS[statusOf(s)].label}</em></button>
       ${s.chapterCount ? `<button type="button" data-sa="readall">${I.checks}<span>${s.allRead ? 'Mark all as unread' : 'Mark all as read'}</span></button>` : ''}
@@ -585,7 +600,6 @@ function openSeriesMenu() {
           setCoverUrl(s.id, null);
           closeAndRefresh();
           break;
-        case 'notes': closeOverlay({ navTo: `#/notes/${s.id}` }); break;
         case 'rename': openRenameSheet(); break;
         case 'status': openStatusSheet(); break;
         case 'readall':
@@ -836,7 +850,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
         <button type="button" data-action="open-settings">${I.text}Text</button>
         <button type="button" data-action="cycle-theme">${I.moon}Theme</button>
         <button type="button" data-action="chapter-notes">${I.notes}Notes</button>
-        <a href="#/series/${series.id}" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:12px;height:64px">${I.list}Chapters</a>
+        <button type="button" data-action="reader-codex">${codex.CODEX_ICON}Codex</button>
       </div>
     </section>`;
 
@@ -850,10 +864,15 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
 
   // ---- notes in this chapter ----
   const where = `${series.name} · Ch. ${n}`;
+  let cxEntries = [];
   async function refreshNotes() {
-    const [list, tags] = await Promise.all([db.getNotesOfChapter(id), db.getAllTags()]);
+    const [list, tags, entries] = await Promise.all([db.getNotesOfChapter(id), db.getAllTags(), db.getCodexOfSeries(series.id)]);
+    cxEntries = entries;
+    codex.clearNames(textEl);
     notes.clearMarks(textEl);
     notes.applyMarks(paras, list, tags);
+    // Codex names get a dotted underline (after the note marks, which use text positions).
+    if (settings.codexNames !== false) codex.applyNames(paras, entries);
   }
   function jumpTo(noteId) {
     const marks = textEl.querySelectorAll(`mark[data-note="${noteId}"]`);
@@ -872,6 +891,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     }
     measure();
     updateUI();
+    find.showStepper({ paras, term, whole, para, nth, onMove: () => { measure(); updateUI(); } });
   }
   const noteCtx = { chapter, series, where, onChanged: refreshNotes, onJump: jumpTo, onFindJump: jumpToMatch };
 
@@ -999,6 +1019,14 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return;
     const mark = e.target.closest('mark.note-mark');
+    const name = e.target.closest('span.cx-name');
+    if (name) {
+      codex.openPeek(Number(name.dataset.entry), {
+        onNote: mark ? () => notes.openNoteCard(Number(mark.dataset.note), noteCtx) : null,
+        noteLabel: 'Open note',
+      });
+      return;
+    }
     if (mark) { notes.openNoteCard(Number(mark.dataset.note), noteCtx); return; }
     lastY = window.scrollY;
     document.body.classList.toggle('controls-open');
@@ -1029,6 +1057,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     restore,
     refreshNotes,
     chapterNotes: () => notes.openChapterNotes(noteCtx),
+    openCodex: () => codex.openReaderCodex({ seriesId: series.id, chapterText: paras.map(p => p.textContent).join('\n'), onChanged: refreshNotes }),
     relock: () => (settings.keepAwake ? lockScreen() : unlockScreen()),
   };
 
@@ -1052,6 +1081,16 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       find.openFind({ term: sel.quote.split('\n')[0], chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch });
     } else if (action === 'copy') {
       try { await navigator.clipboard.writeText(sel.quote); toast('Copied'); } catch { toast('Couldn’t copy'); }
+    } else if (action === 'codex') {
+      const known = codex.entryNamed(cxEntries, sel.quote);
+      if (known) codex.openPeek(known.id);
+      else {
+        codex.openEntryEditor({
+          seriesId: series.id,
+          name: sel.quote.replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/['’]s$/u, '').slice(0, 80),
+          onSaved: refreshNotes,
+        });
+      }
     } else if (action === 'define') {
       dictionary.openDefine({
         text: sel.quote,
@@ -1059,7 +1098,12 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
           const tagIds = text ? [(await notes.vocabularyTag()).id] : [];
           notes.openNoteEditor({ note: { ...draft, text, tagIds }, where, onSaved: refreshNotes });
         },
-        onFind: () => find.openFind({ term: dictionary.cleanWord(sel.quote), chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch }),
+        onFind: w => find.openFind({ term: w || dictionary.cleanWord(sel.quote), chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch }),
+        onCodex: () => codex.openEntryEditor({
+          seriesId: series.id,
+          name: sel.quote.replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/['’]s$/u, ''),
+          onSaved: refreshNotes,
+        }),
       });
     }
   });
@@ -1069,7 +1113,12 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   window.addEventListener('pagehide', save);
   lockScreen();
 
+  // The reader keeps its own place, so the browser mustn't restore old scroll positions
+  // when a sheet closes (that used to undo jumps to Find results).
+  history.scrollRestoration = 'manual';
   cleanupView = async () => {
+    history.scrollRestoration = 'auto';
+    find.hideStepper();
     window.removeEventListener('scroll', onScroll);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pagehide', save);
@@ -1492,10 +1541,12 @@ const seriesCount = n => (n === 1 ? '1 series' : `${n} series`);
 /* ------------------------------------------------------------------ settings screen */
 
 async function renderSettings() {
-  const [count, estimate, persisted] = await Promise.all([
+  const [count, estimate, persisted, pack, savedWords] = await Promise.all([
     db.counts(),
     navigator.storage?.estimate?.().catch(() => null) ?? null,
     navigator.storage?.persisted?.().catch(() => false) ?? false,
+    dictionary.packStatus().catch(() => ({ ready: false })),
+    db.countDefinitions().catch(() => 0),
   ]);
   const state = backupState();
   const mb = estimate?.usage != null ? (estimate.usage / 1048576).toFixed(estimate.usage < 10485760 ? 1 : 0) : null;
@@ -1560,6 +1611,39 @@ async function renderSettings() {
           <span class="txt"><b>Show progress footer</b><small>Percent and time left at the bottom</small></span>
           <input type="checkbox" role="switch" data-toggle="showFooter" ${settings.showFooter !== false ? 'checked' : ''}>
         </label>
+        <label class="set-row">
+          <span class="txt"><b>Underline Codex names</b><small>Dotted line under characters, places… you added; tap for a quick card</small></span>
+          <input type="checkbox" role="switch" data-toggle="codexNames" ${settings.codexNames !== false ? 'checked' : ''}>
+        </label>
+      </div>
+    </section>
+
+    <section class="set-group" aria-label="Dictionary">
+      <p class="label">Dictionary</p>
+      <div class="set-card dict-card">
+        <div class="set-row is-info is-stack">
+          <span class="txt"><b>Merriam-Webster keys</b>
+            <small>Free for personal use. Get them at <a href="https://dictionaryapi.com/register/index" target="_blank" rel="noopener">dictionaryapi.com</a>
+            (choose Learner’s and Collegiate). Without keys, Define uses Wiktionary.</small></span>
+          <label class="key-field"><span>Learner’s</span>
+            <input type="text" data-dict-key="mwLearnersKey" value="${esc(settings.mwLearnersKey || '')}" placeholder="Paste the Learner’s key" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <label class="key-field"><span>Collegiate</span>
+            <input type="text" data-dict-key="mwCollegiateKey" value="${esc(settings.mwCollegiateKey || '')}" placeholder="Paste the Collegiate key" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        </div>
+        <div class="set-row is-info">
+          <span class="txt"><b>Offline dictionary</b>
+            <small id="pack-status">${pack.ready
+              ? `${Number(pack.words).toLocaleString('en-US')} words · used when there’s no internet`
+              : 'Open English WordNet · 7.4 MB download · any word without internet'}</small></span>
+          ${pack.ready
+            ? '<button type="button" class="btn" data-action="pack-remove" style="height:40px;padding:0 14px;font-size:14px">Remove</button>'
+            : '<button type="button" class="btn btn-accent" data-action="pack-download" style="height:40px;padding:0 14px;font-size:14px">Download</button>'}
+        </div>
+        <div class="set-row is-info">
+          <span class="txt"><b>Saved words</b>
+            <small>${plural(savedWords, 'word')} looked up and kept for offline use</small></span>
+          ${savedWords ? '<button type="button" class="btn" data-action="dict-clear" style="height:40px;padding:0 14px;font-size:14px">Clear</button>' : ''}
+        </div>
       </div>
     </section>
 
@@ -1585,6 +1669,11 @@ async function renderSettings() {
 
   ensureAllFonts();
   bindAppearance(app.querySelector('main'));
+  app.querySelectorAll('[data-dict-key]').forEach(input => input.addEventListener('change', () => {
+    settings = { ...settings, [input.dataset.dictKey]: input.value.trim() };
+    saveSettings(settings);
+    toast(input.value.trim() ? 'Key saved' : 'Key removed');
+  }));
 }
 
 /* ------------------------------------------------------------------ backup screen */
@@ -1740,6 +1829,11 @@ document.addEventListener('click', e => {
       folderInput.value = '';
       folderInput.click();
       break;
+    case 'series-tab': {
+      const t = el.dataset.tab;
+      location.replace(`#/series/${currentSeries.id}${t === 'chapters' ? '' : `/${t}`}`);
+      break;
+    }
     case 'toggle-order':
       seriesOrderDesc = !seriesOrderDesc;
       route();
@@ -1755,6 +1849,28 @@ document.addEventListener('click', e => {
     case 'jump': openJumpSheet(); break;
     case 'chapter-notes':
       activeReader?.chapterNotes();
+      break;
+    case 'pack-download': {
+      el.disabled = true;
+      const status = document.getElementById('pack-status');
+      dictionary.downloadPack(p => { el.textContent = `${Math.round(p * 100)}%`; })
+        .then(words => { toast(`Offline dictionary ready · ${words.toLocaleString('en-US')} words`); route(); })
+        .catch(err => {
+          console.warn(err);
+          el.disabled = false;
+          el.textContent = 'Try again';
+          if (status) status.textContent = 'Download failed — check the internet connection.';
+        });
+      break;
+    }
+    case 'pack-remove':
+      dictionary.removePack().then(() => { toast('Offline dictionary removed'); route(); });
+      break;
+    case 'dict-clear':
+      db.clearDefinitions().then(() => { toast('Saved words cleared'); route(); });
+      break;
+    case 'reader-codex':
+      activeReader?.openCodex();
       break;
     case 'snooze-backup':
       settings = { ...settings, backupSnoozeUntil: Date.now() + 3 * DAY };

@@ -2,7 +2,7 @@
 // in this chapter, this series or all series, with the sentence around it.
 
 import * as db from './db.js';
-import { esc, fmtNum, plural, I, openSheet, closeOverlay } from './ui.js';
+import { esc, fmtNum, plural, I, svg, openSheet, closeOverlay } from './ui.js';
 
 const MAX_SHOWN = 300; // results listed per scope (counts are always complete)
 
@@ -176,8 +176,14 @@ export async function openFind({ term, chapterId, seriesId, onJumpHere = null })
     const h = state.all[Number(hitBtn.dataset.hit)];
     if (!h) return;
     if (h.chapterId === chapterId && onJumpHere) {
+      // Closing the sheet goes back one step in history; jump only after that has
+      // finished, or the browser's own scroll restore would undo the jump.
+      const go = () => onJumpHere(h.para, h.nth, state.term, state.whole);
+      let done = false;
+      const once = () => { if (!done) { done = true; requestAnimationFrame(go); } };
+      window.addEventListener('popstate', once, { once: true });
+      setTimeout(once, 350);
       closeOverlay();
-      onJumpHere(h.para, h.nth, state.term, state.whole);
     } else {
       const t = encodeURIComponent(state.term);
       closeOverlay({ navTo: `#/read/${h.chapterId}/find/${h.para}/${h.nth}/${state.whole ? 1 : 0}/${t}` });
@@ -192,9 +198,19 @@ export async function openFind({ term, chapterId, seriesId, onJumpHere = null })
  * Briefly mark the nth match of a search inside paragraph `p` and scroll to it.
  * Returns true if it was found.
  */
+function unwrapFindMarks() {
+  document.querySelectorAll('mark.find-mark').forEach(mk => {
+    const parent = mk.parentNode;
+    while (mk.firstChild) parent.insertBefore(mk.firstChild, mk);
+    mk.remove();
+    parent.normalize();
+  });
+}
+
 export function flashMatch(p, nth, term, wholeWord) {
   const pattern = makePattern(term, wholeWord);
   if (!p || !pattern) return false;
+  unwrapFindMarks(); // only one highlighted use at a time
   const text = p.textContent;
   let m;
   let i = 0;
@@ -242,4 +258,63 @@ export function flashMatch(p, nth, term, wholeWord) {
     p.normalize();
   }, 2600);
   return true;
+}
+
+/* ------------------------------------------------------------------ stepping through uses */
+
+/** Every match of the term in this chapter's paragraphs, in reading order. */
+export function chapterMatches(paras, term, wholeWord) {
+  const out = [];
+  paras.forEach((p, para) => {
+    const pattern = makePattern(term, wholeWord);
+    if (!pattern) return;
+    const text = p.textContent;
+    let m;
+    let nth = 0;
+    while ((m = pattern.exec(text))) {
+      out.push({ para, nth });
+      nth += 1;
+      if (!m[0].length) pattern.lastIndex += 1;
+    }
+  });
+  return out;
+}
+
+let stepper = null;
+export function hideStepper() { stepper?.remove(); stepper = null; }
+
+/**
+ * Small bar at the bottom of the reader after jumping to a use:
+ * "“term” · 2 of 7 in this chapter"  ↑ ↓ ×
+ */
+export function showStepper({ paras, term, whole, para, nth, onMove }) {
+  hideStepper();
+  const list = chapterMatches(paras, term, whole);
+  if (list.length < 1) return;
+  let i = Math.max(0, list.findIndex(x => x.para === para && x.nth === nth));
+  const el = document.createElement('div');
+  el.className = 'find-stepper';
+  el.setAttribute('role', 'toolbar');
+  el.setAttribute('aria-label', `Uses of ${term}`);
+  const draw = () => {
+    el.innerHTML = `
+      <button type="button" data-step="-1" aria-label="Previous use"${list.length < 2 ? ' disabled' : ''}>${svg('<path d="M6 15l6-6 6 6"/>', 20, 2)}</button>
+      <span><b>“${esc(term)}”</b> · ${i + 1} of ${list.length}</span>
+      <button type="button" data-step="1" aria-label="Next use"${list.length < 2 ? ' disabled' : ''}>${svg('<path d="M6 9l6 6 6-6"/>', 20, 2)}</button>
+      <button type="button" data-step="0" aria-label="Close" class="is-close">${svg('<path d="M6 6l12 12M18 6L6 18"/>', 18, 2)}</button>`;
+  };
+  draw();
+  el.addEventListener('click', e => {
+    e.stopPropagation();
+    const b = e.target.closest('[data-step]');
+    if (!b) return;
+    const d = Number(b.dataset.step);
+    if (!d) { hideStepper(); return; }
+    i = (i + d + list.length) % list.length;
+    draw();
+    flashMatch(paras[list[i].para], list[i].nth, term, whole);
+    onMove?.();
+  });
+  document.body.append(el);
+  stepper = el;
 }

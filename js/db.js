@@ -11,6 +11,8 @@
 //   sounds    { id, name, blob, duration, addedAt }                     <- your own background sounds (v4, not in backups)
 //   dictionary { word, entries | null, at }                             <- looked-up definitions, for offline use (v5, not in backups)
 //   (tags got seriesId in v5: a series' id, or null for shared tags)
+//   codex     { id, seriesId, type, name, aliases: [], fields: {}, about, createdAt, updatedAt } (v6)
+//   wordnet   { k, words }  <- the offline dictionary, in chunks by first two letters (v7, not in backups)
 //
 // A note points at text with paragraph + character offsets (sp/so = start, ep/eo = end).
 // The quoted text is stored too, so a note can find its place again if the chapter is re-imported.
@@ -21,7 +23,7 @@
 import { nameKey } from './parser.js';
 
 const DB_NAME = 'reader-app';
-const DB_VERSION = 5;
+const DB_VERSION = 7;
 let dbPromise = null;
 
 function req(r) {
@@ -65,6 +67,13 @@ export function openDB() {
       }
       if (event.oldVersion < 5) {
         db.createObjectStore('dictionary', { keyPath: 'word' });
+      }
+      if (event.oldVersion < 6) {
+        const codex = db.createObjectStore('codex', { keyPath: 'id', autoIncrement: true });
+        codex.createIndex('seriesId', 'seriesId');
+      }
+      if (event.oldVersion < 7) {
+        db.createObjectStore('wordnet', { keyPath: 'k' });
       }
     };
     open.onsuccess = () => resolve(open.result);
@@ -119,7 +128,7 @@ export const updateSeries = (id, patch) => withTx(['series'], 'readwrite', async
  */
 export function renameSeries(id, newName, merge = false) {
   const key = nameKey(newName);
-  return withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes', 'tags'], 'readwrite', async s => {
+  return withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes', 'tags', 'codex'], 'readwrite', async s => {
     const series = await req(s.series.get(id));
     const other = await req(s.series.index('nameKey').get(key));
 
@@ -151,6 +160,10 @@ export function renameSeries(id, newName, merge = false) {
       await req(s.covers.put({ seriesId: other.id, blob: cover.blob }));
     }
     await req(s.covers.delete(id));
+    for (const e of await req(s.codex.index('seriesId').getAll(id))) {
+      e.seriesId = other.id;
+      await req(s.codex.put(e));
+    }
     // This series' own tags move along; one with the same name as a tag there is joined into it.
     const allTags = await req(s.tags.getAll());
     for (const t of allTags.filter(x => x.seriesId === id)) {
@@ -173,10 +186,11 @@ export function renameSeries(id, newName, merge = false) {
 
 /** Delete a series with all its chapters, texts, progress and cover. */
 export const deleteSeries = id =>
-  withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes', 'tags'], 'readwrite', async s => {
+  withTx(['series', 'chapters', 'texts', 'progress', 'covers', 'notes', 'tags', 'codex'], 'readwrite', async s => {
     const ids = await req(s.chapters.index('seriesId').getAllKeys(id));
     for (const chapterId of ids) await removeChapter(s, chapterId);
     for (const t of await req(s.tags.getAll())) if (t.seriesId === id) await req(s.tags.delete(t.id));
+    for (const key of await req(s.codex.index('seriesId').getAllKeys(id))) await req(s.codex.delete(key));
     await req(s.covers.delete(id));
     await req(s.series.delete(id));
     return ids.length;
@@ -339,9 +353,45 @@ export const deleteTag = id => withTx(['tags', 'notes'], 'readwrite', async s =>
   }
 });
 
+// ---------- Codex (characters, places, factions, skills, items of a series) ----------
+export const getCodexOfSeries = seriesId =>
+  withTx(['codex'], 'readonly', s => req(s.codex.index('seriesId').getAll(seriesId)));
+export const getCodexEntry = id => withTx(['codex'], 'readonly', s => req(s.codex.get(id)));
+export const putCodexEntry = entry => withTx(['codex'], 'readwrite', async s => {
+  const now = Date.now();
+  const rec = { createdAt: now, ...entry, updatedAt: now };
+  rec.id = await req(s.codex.put(rec));
+  return rec;
+});
+/** Delete an entry and remove links to it from the other entries. */
+export const deleteCodexEntry = id => withTx(['codex'], 'readwrite', async s => {
+  const entry = await req(s.codex.get(id));
+  if (!entry) return;
+  for (const e of await req(s.codex.index('seriesId').getAll(entry.seriesId))) {
+    let changed = false;
+    for (const [k, v] of Object.entries(e.fields || {})) {
+      if (!Array.isArray(v)) continue;
+      const kept = v.filter(x => (typeof x === 'object' ? x.id : x) !== id);
+      if (kept.length !== v.length) { e.fields[k] = kept; changed = true; }
+    }
+    if (changed) await req(s.codex.put(e));
+  }
+  await req(s.codex.delete(id));
+});
+
 // ---------- Dictionary (saved lookups) ----------
 export const getDefinition = word => withTx(['dictionary'], 'readonly', s => req(s.dictionary.get(word)));
 export const putDefinition = obj => withTx(['dictionary'], 'readwrite', s => req(s.dictionary.put(obj)));
+export const countDefinitions = () => withTx(['dictionary'], 'readonly', s => req(s.dictionary.count()));
+export const clearDefinitions = () => withTx(['dictionary'], 'readwrite', s => req(s.dictionary.clear()));
+
+// ---------- Offline dictionary pack ----------
+export const wordnetGet = k => withTx(['wordnet'], 'readonly', s => req(s.wordnet.get(k)));
+export const wordnetPutAll = records => withTx(['wordnet'], 'readwrite', async s => {
+  await req(s.wordnet.clear());
+  for (const r of records) s.wordnet.put(r);
+});
+export const wordnetClear = () => withTx(['wordnet'], 'readwrite', s => req(s.wordnet.clear()));
 
 // ---------- Notes ----------
 export const getAllNotes = () => withTx(['notes'], 'readonly', s => req(s.notes.getAll()));
@@ -359,7 +409,7 @@ export const putNote = note => withTx(['notes'], 'readwrite', s => {
 export const deleteNote = id => withTx(['notes'], 'readwrite', s => req(s.notes.delete(id)));
 
 // ---------- Whole library (backup & restore) ----------
-const ALL_STORES = ['series', 'chapters', 'texts', 'progress', 'covers', 'tags', 'notes'];
+const ALL_STORES = ['series', 'chapters', 'texts', 'progress', 'covers', 'tags', 'notes', 'codex'];
 
 /** Read every record of every store, in one consistent snapshot. */
 export const exportAll = () => withTx(ALL_STORES, 'readonly', async s => {

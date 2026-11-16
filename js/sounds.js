@@ -470,12 +470,20 @@ const PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor
 export const HEADPHONES = svg('<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><path d="M4 15h3v5H5a1 1 0 0 1-1-1zM20 15h-3v5h2a1 1 0 0 0 1-1z"/>');
 
 export async function openSoundsPanel() {
+  const sheet = openSheet('<div class="sounds" id="sounds"></div>', s => s.classList.add('sounds-sheet'));
+  await mountSounds(sheet.querySelector('#sounds'), { page: false });
+}
+
+/** The Sounds tab (bottom navigation): the same controls as a full page. */
+export async function renderSoundsPage(app, navHtml) {
+  app.innerHTML = `<main class="page sounds-page"><div class="sounds" id="sounds"></div></main>${navHtml}`;
+  await mountSounds(app.querySelector('#sounds'), { page: true });
+}
+
+async function mountSounds(root, { page }) {
   let mine = await db.getAllSounds();
   const loading = new Set();
   let confirmDelete = null;
-
-  const sheet = openSheet('<div class="sounds" id="sounds"></div>', s => s.classList.add('sounds-sheet'));
-  const root = sheet.querySelector('#sounds');
 
   const sliderRow = (key, name) => `
     <label class="snd-vol">
@@ -489,7 +497,7 @@ export async function openSoundsPanel() {
     const playingList = [...players.entries()];
     root.innerHTML = `
       <div class="snd-head">
-        <h2>Sounds</h2>
+        ${page ? '<h1 class="page-title">Sounds</h1>' : '<h2>Sounds</h2>'}
         ${players.size ? `<button type="button" class="chip" data-snd="${paused ? 'resume' : 'stop'}">${paused ? 'Resume' : 'Stop all'}</button>` : ''}
       </div>
       <div class="snd-grid">
@@ -600,6 +608,10 @@ export async function openSoundsPanel() {
   });
 
   draw();
+  const off = onChange(() => {
+    if (!root.isConnected) { off(); return; }
+    if (!loading.size && !root.contains(document.activeElement)) draw();
+  });
 }
 
 // A timer chosen before any sound starts counting when the first one plays.

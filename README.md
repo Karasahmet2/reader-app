@@ -116,6 +116,68 @@ Plain HTML, CSS and JavaScript — no build step.
 - Existing tags were sorted automatically: Vocabulary/Sayings/Likes-type names and tags used
   in several series became shared; a tag used in only one series went to that series.
 
+## Update 6
+
+- **Series page tabs: Chapters · Notes · Codex.** The Notes tab shows only that series'
+  notes (its own tags, then the shared ones; *Tags* manages them).
+- **Bottom bar: Library · Import · Sounds · Settings.** The Sounds page has the same
+  controls as the reader's headphones panel. Notes from all series together: the notes
+  icon at the top of the Library.
+- **Codex**: a small wiki per series. Entries are Characters, Places, Factions, Skills or
+  Items, with other names, a few fields (title, lives in, faction, skills, relations…),
+  free text, and links between entries. Each entry shows what links to it, the notes that
+  mention it, where it first appears, and *Find every mention*.
+  Add one by selecting a name while reading → **Codex**, from the reader's Codex tool, or
+  from the series page. Names in the Codex get a dotted underline in the text (Settings →
+  *Underline Codex names*); tap one for a quick card.
+- **Selection bar**: six equal buttons with a short word under each icon —
+  Note · Define · Codex · Mark · Find · Copy (Define only for single words).
+- **Find**: tapping a use now really scrolls there (a bug used to undo the jump), and a
+  small bar lets you step ↑ ↓ through the other uses in the chapter.
+- **Reader tools**: Text · Theme · Notes · Codex (chapters are in the top bar).
+- The Codex is included in backups.
+
+## Update 7 — better dictionary
+
+- **Merriam-Webster inside Define**: the Learner's Dictionary (clear definitions written for
+  people learning English, with examples and pronunciation), then the Collegiate for rarer
+  words. Needs two free keys: Settings → Dictionary (see below). Without keys, Define keeps
+  using Wiktionary. When a word isn't found, "Did you mean" suggestions are shown.
+- **Offline dictionary**: Settings → Dictionary → Download (7.4 MB, Open English WordNet,
+  ~152,000 words). Used when there's no internet, and as a backup for words Merriam-Webster
+  doesn't have.
+- **Open in Cambridge · Oxford · Longman** at the bottom of every Define sheet.
+- **Saved words** can be cleared in Settings → Dictionary.
+- Merriam-Webster asks apps to show its logo: download it from your dictionaryapi.com account
+  and save it as `icons/mw-logo.png`; the Define sheet shows it automatically.
+
+### Getting the Merriam-Webster keys
+
+1. Go to https://dictionaryapi.com/register/index and create a free account.
+2. Pick **Merriam-Webster's Learner's Dictionary** and **Merriam-Webster's Collegiate
+   Dictionary** as your two APIs, and say it's for personal, non-commercial use.
+3. Confirm the email; your two keys appear under *Your Keys* on dictionaryapi.com.
+4. In the app: Settings → Dictionary → paste each key into its box.
+
+The keys stay on your phone (and in your backup files), never in the GitHub code.
+
+Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 4.0.
+
+## Update 8 — two dictionaries in Define
+
+- The Define sheet has a switch at the top: **Merriam-Webster** (Learner's — clear, short
+  definitions) and **Wiktionary** (via FreeDictionaryAPI.com — the fuller entry: more
+  meanings, sub-meanings, UK/US pronunciation, word forms, similar words).
+- It opens on the one you used last. Each word is saved per dictionary, so both tabs work
+  offline for words you've looked up before; otherwise the offline pack answers.
+- "regarded" in Wiktionary opens the full entry of *regard* ("past tense of regard").
+- If one dictionary doesn't have the word, the sheet says so and offers **Show it** when the
+  other one does, plus *Did you mean*, **Add a note** and **Add to Codex**.
+- Once the offline dictionary is downloaded (Settings → Dictionary), a third tab, **Offline**
+  (Open English WordNet), appears and works with no internet at all.
+- Wiktionary needs no key (up to 1,000 lookups an hour). Credit: content from Wiktionary
+  (CC BY-SA 4.0) via FreeDictionaryAPI.com, shown under every Wiktionary definition.
+
 ## Project structure
 
 ```
@@ -131,9 +193,11 @@ js/backup.js          backup file: create, check, restore
 js/find.js            Find uses: search chapters, jump to results
 js/sounds.js          background sounds: built-in sounds, your own sounds, sleep timer
 js/dictionary.js      Define: word lookups, saved definitions for offline use
+js/codex.js           Codex: characters, places, factions, skills, items and their links
 sw.js                 offline support (bump VERSION after changes)
 manifest.webmanifest  app name and icons for "Add to Home screen"
 icons/                app icons
+data/wordnet-en.json.gz  offline dictionary pack (Open English WordNet, CC BY 4.0)
 ```
 
 ## Run it on your computer
@@ -166,7 +230,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v10` → `reader-v11`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v14` → `reader-v15`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

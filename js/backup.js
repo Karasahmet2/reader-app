@@ -102,6 +102,7 @@ export async function restoreBackup(backup) {
     covers,
     tags: d.tags || [],
     notes: d.notes || [],
+    codex: d.codex || [],
   });
   return backup.settings || {};
 }

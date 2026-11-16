@@ -7,9 +7,11 @@
 
 import * as db from './db.js';
 import { TAG_PALETTE, OLD_TAG_COLORS } from './settings.js';
-import { esc, fmtNum, plural, short, I, toast, openSheet, closeOverlay } from './ui.js';
+import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay } from './ui.js';
 import { openFind } from './find.js';
 import { isSingleWord } from './dictionary.js';
+
+const CODEX_SM = svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/><circle cx="12" cy="8.5" r="2"/>', 18);
 
 export const TAG_COLORS = Object.keys(TAG_PALETTE); // 12 colors
 
@@ -245,7 +247,7 @@ function readSelection(textEl, paras) {
 }
 
 /**
- * Show the Note · Define · Highlight · Find · Copy bar while text is selected in the reader.
+ * Show the Note · Define · Codex · Mark · Find · Copy bar while text is selected in the reader.
  * onAction(action, selection) is called when a button is tapped. Returns a cleanup function.
  */
 export function setupSelectionBar(textEl, paras, onAction) {
@@ -254,12 +256,12 @@ export function setupSelectionBar(textEl, paras, onAction) {
   bar.setAttribute('role', 'toolbar');
   bar.setAttribute('aria-label', 'Selected text');
   bar.innerHTML = `
-    <button type="button" class="sel-main" data-sel="note">${I.note}Note</button>
-    <button type="button" class="sel-define" data-sel="define">${I.book}Define</button>
-    <span class="sel-space"></span>
-    <button type="button" data-sel="highlight" aria-label="Highlight">${I.highlight}</button>
-    <button type="button" data-sel="find" aria-label="Find uses">${I.searchSm}</button>
-    <button type="button" data-sel="copy" aria-label="Copy">${I.copy}</button>`;
+    <button type="button" class="sel-main" data-sel="note">${I.note}<span>Note</span></button>
+    <button type="button" class="sel-define" data-sel="define">${I.book}<span>Define</span></button>
+    <button type="button" class="sel-codex" data-sel="codex">${CODEX_SM}<span>Codex</span></button>
+    <button type="button" data-sel="highlight" aria-label="Highlight">${I.highlight}<span>Mark</span></button>
+    <button type="button" data-sel="find" aria-label="Find uses">${I.searchSm}<span>Find</span></button>
+    <button type="button" data-sel="copy" aria-label="Copy">${I.copy}<span>Copy</span></button>`;
   document.body.append(bar);
 
   let last = null;
@@ -637,6 +639,13 @@ const savedSeries = () => {
 };
 const saveSeriesChoice = v => { try { localStorage.setItem(SERIES_KEY, String(v)); } catch { /* ignore */ } };
 
+const seriesTabs = new Map();
+/** Filter state for the Notes tab on a series page (one per series, kept while the app is open). */
+function seriesTabState(seriesId) {
+  if (!seriesTabs.has(seriesId)) seriesTabs.set(seriesId, { filter: 'all', query: '', searchOpen: false, sort: 'recent' });
+  return seriesTabs.get(seriesId);
+}
+
 export const notesState = {
   filter: 'all',
   query: '',
@@ -651,7 +660,9 @@ export const notesState = {
  * navHtml: the bottom navigation. coverHtml(series): a tiny cover for headers.
  * openSeriesId: from #/notes/ID — start on that series.
  */
-export async function renderNotes(app, navHtml, coverHtml = () => '', openSeriesId = null) {
+export async function renderNotes(app, navHtml, coverHtml = () => '', openSeriesId = null, fixed = null) {
+  // fixed = { seriesId, root }: draw just this series' notes inside the series page.
+  const st = fixed ? seriesTabState(fixed.seriesId) : notesState;
   const [everyNote, tags, chapters, series] = await Promise.all([
     db.getAllNotes(), db.getAllTags(), db.getAllChapters(), db.getAllSeries(),
   ]);
@@ -663,26 +674,43 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
     saveSeriesChoice(openSeriesId);
   }
   if (notesState.seriesId !== 'all' && !seriesById.has(notesState.seriesId)) notesState.seriesId = 'all';
-  const one = notesState.seriesId !== 'all' ? seriesById.get(notesState.seriesId) : null;
+  const one = fixed ? seriesById.get(fixed.seriesId)
+    : notesState.seriesId !== 'all' ? seriesById.get(notesState.seriesId) : null;
   const allNotes = one ? everyNote.filter(n => n.seriesId === one.id) : everyNote;
   const { own, shared } = tagsFor(tags, one?.id ?? null);
   const chipTags = one ? [...own, ...shared] : shared;
-  if (notesState.filter !== 'all' && !chipTags.some(t => t.id === notesState.filter)) notesState.filter = 'all';
+  if (st.filter !== 'all' && !chipTags.some(t => t.id === st.filter)) st.filter = 'all';
 
   const counts = new Map();
   for (const n of allNotes) for (const id of n.tagIds || []) counts.set(id, (counts.get(id) || 0) + 1);
-  const chipHtml = t => `<button type="button" data-ntag="${t.id}" aria-pressed="${notesState.filter === t.id}">
+  const chipHtml = t => `<button type="button" data-ntag="${t.id}" aria-pressed="${st.filter === t.id}">
     <i class="chip-dot" style="background:${tagColor(t.color)}"></i>${esc(t.name)}${counts.get(t.id) ? ` <span class="count">${counts.get(t.id)}</span>` : ''}</button>`;
 
-  app.innerHTML = `<main class="page">
+  const chipsHtml = `    <nav class="filter-chips" aria-label="Filter by tag">
+      <button type="button" data-ntag="all" aria-pressed="${st.filter === 'all'}">All${allNotes.length ? ` <span class="count">${allNotes.length}</span>` : ''}</button>
+      ${own.length && one ? own.map(chipHtml).join('') : ''}
+      ${one && own.length && shared.length ? '<span class="chip-sep" aria-hidden="true"></span>' : ''}
+      ${shared.map(chipHtml).join('')}
+    </nav>
+    <div class="list-meta">
+      <span id="notes-count"></span>
+      ${fixed ? `<button type="button" class="sort-btn" data-nt="tags">${I.tag} Tags</button>`
+        : one ? '<span>Reading order</span>' : `<button type="button" class="sort-btn" data-nt="sort">${I.sort}${NOTE_SORTS[st.sort]}</button>`}
+    </div>
+    <div id="notes-list" class="notes-groups"></div>
+`;
+  if (fixed) {
+    fixed.root.innerHTML = `<div class="series-notes">${chipsHtml}</div>`;
+  } else {
+    app.innerHTML = `<main class="page">
     <div class="row-head">
       <h1 class="page-title">Notes</h1>
-      <button type="button" class="icon-btn" data-nt="search" aria-label="Search notes" aria-expanded="${notesState.searchOpen}">${I.search}</button>
+      <button type="button" class="icon-btn" data-nt="search" aria-label="Search notes" aria-expanded="${st.searchOpen}">${I.search}</button>
       <button type="button" class="icon-btn" data-nt="tags" aria-label="Manage tags">${I.tag}</button>
     </div>
-    ${notesState.searchOpen ? `<label class="search-box">${I.search}
+    ${st.searchOpen ? `<label class="search-box">${I.search}
       <span class="visually-hidden">Search notes</span>
-      <input id="notes-search" type="search" placeholder="Search words, notes, tags" value="${esc(notesState.query)}" autocomplete="off">
+      <input id="notes-search" type="search" placeholder="Search words, notes, tags" value="${esc(st.query)}" autocomplete="off">
     </label>` : ''}
     <button type="button" class="series-pick" data-nt="series">
       ${one ? coverHtml(one) : `<span class="series-pick-ico">${I.notes}</span>`}
@@ -690,33 +718,25 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
         <small>${plural(allNotes.length, 'note')}${one ? ` · ${plural(own.length, 'series tag')}` : ` · ${plural(new Set(everyNote.map(n => n.seriesId)).size, 'series', 'series')}`}</small></span>
       ${I.down}
     </button>
-    <nav class="filter-chips" aria-label="Filter by tag">
-      <button type="button" data-ntag="all" aria-pressed="${notesState.filter === 'all'}">All${allNotes.length ? ` <span class="count">${allNotes.length}</span>` : ''}</button>
-      ${own.length && one ? own.map(chipHtml).join('') : ''}
-      ${one && own.length && shared.length ? '<span class="chip-sep" aria-hidden="true"></span>' : ''}
-      ${shared.map(chipHtml).join('')}
-    </nav>
-    <div class="list-meta">
-      <span id="notes-count"></span>
-      ${one ? '<span>Reading order</span>' : `<button type="button" class="sort-btn" data-nt="sort">${I.sort}${NOTE_SORTS[notesState.sort]}</button>`}
-    </div>
-    <div id="notes-list" class="notes-groups"></div>
+    ${chipsHtml}
   </main>${navHtml}`;
+  }
+  const host = fixed ? fixed.root : app;
 
   const seriesName = id => seriesById.get(id)?.name || 'Unknown series';
   const chapterNum = n => chapterById.get(n.chapterId)?.number ?? Infinity;
 
   const draw = () => {
-    const q = notesState.query.trim().toLowerCase();
+    const q = st.query.trim().toLowerCase();
     const shown = allNotes.filter(n => {
-      if (notesState.filter !== 'all' && !(n.tagIds || []).includes(notesState.filter)) return false;
-      if (!notesState.searchOpen || !q) return true;
+      if (st.filter !== 'all' && !(n.tagIds || []).includes(st.filter)) return false;
+      if (!st.searchOpen || !q) return true;
       const hay = [n.quote, n.text, seriesName(n.seriesId),
         ...(n.tagIds || []).map(id => tagsById.get(id)?.name)].join(' ').toLowerCase();
       return hay.includes(q);
     });
 
-    const list = app.querySelector('#notes-list');
+    const list = host.querySelector('#notes-list');
     const groups = new Map();
     for (const n of shown) {
       const g = groups.get(n.seriesId) || { seriesId: n.seriesId, notes: [], latest: 0 };
@@ -724,14 +744,14 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
       g.latest = Math.max(g.latest, n.updatedAt || 0);
       groups.set(n.seriesId, g);
     }
-    app.querySelector('#notes-count').textContent = one
+    host.querySelector('#notes-count').textContent = one
       ? plural(shown.length, 'note')
       : `${groups.size} series · ${plural(shown.length, 'note')}`;
 
     if (!shown.length) {
       list.innerHTML = `<div class="empty" style="padding:40px 16px">
         ${allNotes.length
-          ? `<span>No notes match${q && notesState.searchOpen ? ` “${esc(notesState.query)}”` : ' this tag'}.</span>`
+          ? `<span>No notes match${q && st.searchOpen ? ` “${esc(st.query)}”` : ' this tag'}.</span>`
           : `<span class="empty-ico">${I.notes}</span><strong>No notes yet</strong>
              <span>${one ? `No notes in ${esc(one.name)} yet. ` : ''}While reading, long-press a word or drag across a passage, then tap Note. For a note about the whole chapter, tap the page → Notes.</span>`}
       </div>`;
@@ -742,7 +762,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
       recent: (a, b) => b.latest - a.latest,
       series: (a, b) => seriesName(a.seriesId).localeCompare(seriesName(b.seriesId), undefined, { sensitivity: 'base', numeric: true }),
       count: (a, b) => b.notes.length - a.notes.length || b.latest - a.latest,
-    }[notesState.sort];
+    }[st.sort];
 
     list.innerHTML = [...groups.values()].sort(order).map(g => {
       const s = seriesById.get(g.seriesId);
@@ -763,7 +783,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
   };
   draw();
 
-  const rerender = () => renderNotes(app, navHtml, coverHtml);
+  const rerender = () => renderNotes(app, navHtml, coverHtml, null, fixed);
   const pickSeries = () => {
     const noteCount = new Map();
     for (const n of everyNote) noteCount.set(n.seriesId, (noteCount.get(n.seriesId) || 0) + 1);
@@ -785,31 +805,31 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
         if (!b) return;
         const v = b.dataset.pickSeries;
         notesState.seriesId = v === 'all' ? 'all' : Number(v);
-        notesState.filter = 'all';
+        st.filter = 'all';
         saveSeriesChoice(notesState.seriesId);
         closeOverlay();
         rerender();
       });
     });
   };
-  const search = app.querySelector('#notes-search');
+  const search = host.querySelector('#notes-search');
   if (search) {
-    search.addEventListener('input', () => { notesState.query = search.value; draw(); });
-    if (!notesState.query) search.focus();
+    search.addEventListener('input', () => { st.query = search.value; draw(); });
+    if (!st.query) search.focus();
   }
 
-  app.querySelector('main').addEventListener('click', e => {
+  host.querySelector(fixed ? '.series-notes' : 'main').addEventListener('click', e => {
     const chip = e.target.closest('[data-ntag]');
     if (chip) {
-      notesState.filter = chip.dataset.ntag === 'all' ? 'all' : Number(chip.dataset.ntag);
-      app.querySelectorAll('[data-ntag]').forEach(b => b.setAttribute('aria-pressed', String(b === chip)));
+      st.filter = chip.dataset.ntag === 'all' ? 'all' : Number(chip.dataset.ntag);
+      host.querySelectorAll('[data-ntag]').forEach(b => b.setAttribute('aria-pressed', String(b === chip)));
       draw();
       return;
     }
     const act = e.target.closest('[data-nt]');
     if (act?.dataset.nt === 'search') {
-      notesState.searchOpen = !notesState.searchOpen;
-      if (!notesState.searchOpen) notesState.query = '';
+      st.searchOpen = !st.searchOpen;
+      if (!st.searchOpen) st.query = '';
       rerender();
       return;
     }
