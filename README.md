@@ -173,10 +173,34 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - "regarded" in Wiktionary opens the full entry of *regard* ("past tense of regard").
 - If one dictionary doesn't have the word, the sheet says so and offers **Show it** when the
   other one does, plus *Did you mean*, **Add a note** and **Add to Codex**.
+- Inside the Merriam-Webster tab, a small **Learner's · Collegiate** switch (when both keys are
+  set). It remembers your choice; if the chosen one doesn't have the word, the other is shown
+  with a short note. Both are saved for offline use.
 - Once the offline dictionary is downloaded (Settings → Dictionary), a third tab, **Offline**
   (Open English WordNet), appears and works with no internet at all.
 - Wiktionary needs no key (up to 1,000 lookups an hour). Credit: content from Wiktionary
   (CC BY-SA 4.0) via FreeDictionaryAPI.com, shown under every Wiktionary definition.
+
+## Update 9 — Codex structures, chapter-aware
+
+- **Each series has its own Codex structure**: the "rooms" (kinds of things in the book —
+  e.g. Characters, Organizations, Concepts for *1984*; Characters, Sects, Martial skills for a
+  Murim novel) and their "walls" (fields, and which rooms each field links to).
+  A structure never contains entries: you fill the Codex yourself while reading.
+- **Codex files** (`Series name.codex.json`) describe a structure. Import them in the Import tab
+  (together with chapters or alone) or from the series page → Codex. The app checks the file,
+  fixes small mistakes and lists what it changed. *Codex → ⋯ → Codex format guide* has a
+  prompt you can give an AI agent to write one from the chapters.
+- **Ready-made structures**: Murim / cultivation, Classic novel. Series that already had
+  Codex entries keep working with the Murim structure.
+- **Chapter-aware**: every entry has *Known from Ch. N* (the chapter you're reading when you
+  add it, adjustable). Every connection has *True from Ch. N*, and when a text value changes
+  (e.g. a title), the old value stays as history with its chapter.
+  While reading, the Codex shows only what was known by that chapter — re-reading Ch. 5 hides
+  the "secret brother" you learned about in Ch. 9 (tap **Show** to peek). The entry page has
+  **Viewing as of Ch. …**. Switch it all off with *Codex → ⋯ → Hide what comes later*.
+- **Export the structure** to reuse it for another book or give it to an agent to improve.
+  **Remove this Codex** deletes the structure and its entries.
 
 ## Project structure
 
@@ -193,7 +217,8 @@ js/backup.js          backup file: create, check, restore
 js/find.js            Find uses: search chapters, jump to results
 js/sounds.js          background sounds: built-in sounds, your own sounds, sleep timer
 js/dictionary.js      Define: word lookups, saved definitions for offline use
-js/codex.js           Codex: characters, places, factions, skills, items and their links
+js/codex.js           Codex: per-series structures, entries, links, chapter-aware views
+js/codex-guide.js     the Codex file format, as a prompt for an AI agent
 sw.js                 offline support (bump VERSION after changes)
 manifest.webmanifest  app name and icons for "Add to Home screen"
 icons/                app icons
@@ -230,7 +255,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v14` → `reader-v15`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v16` → `reader-v17`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

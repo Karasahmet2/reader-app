@@ -390,8 +390,61 @@ const save = (src, word, rec) => db.putDefinition({ word: `${src}:${word}`, ...r
  * Returns { status: 'ok', info, saved, fallback } | { status: 'none', suggestions }
  *       | { status: 'nokey' } | { status: 'offline' }.
  */
-export async function lookupIn(src, word) {
+const MW_REF_KEY = 'reader-define-mw';
+const MW_NAMES = { learners: 'Learner’s', collegiate: 'Collegiate' };
+/** Which Merriam-Webster dictionary to show first: 'learners' or 'collegiate'. */
+export function mwChoice() {
+  const k = keys();
+  let v = 'learners';
+  try { v = localStorage.getItem(MW_REF_KEY) || v; } catch { /* ignore */ }
+  if (v === 'collegiate' && !k.collegiate) v = 'learners';
+  if (v === 'learners' && !k.learners) v = 'collegiate';
+  return v;
+}
+function setMwChoice(v) { try { localStorage.setItem(MW_REF_KEY, v); } catch { /* ignore */ } }
+
+/**
+ * Merriam-Webster: the chosen dictionary first, the other one if it doesn't have the word.
+ * Each is saved separately ("mw-learners:word", "mw-collegiate:word").
+ */
+async function mwLookupIn(word, first) {
+  const k = keys();
+  const order = (first === 'collegiate' ? ['collegiate', 'learners'] : ['learners', 'collegiate']).filter(r => k[r]);
+  let suggestions = [];
+  let offline = false;
+  const legacy = await db.getDefinition(`mw:${word}`).catch(() => null) || await db.getDefinition(word).catch(() => null);
+  for (const ref of order) {
+    const swapped = ref !== order[0];
+    const rec = await db.getDefinition(`mw-${ref}:${word}`).catch(() => null)
+      || (legacy?.info?.source === ref ? legacy : null);
+    if (rec?.info) return { status: 'ok', info: rec.info, saved: true, ref, swapped };
+    if (rec && !rec.info && Date.now() - rec.at < RETRY_MISSING) {
+      if (rec.suggestions?.length && !suggestions.length) suggestions = rec.suggestions;
+      continue;
+    }
+    if (offline) continue;
+    try {
+      const r = await mwLookup(ref, k[ref], word);
+      if (r?.info) {
+        await save(`mw-${ref}`, word, { info: r.info });
+        return { status: 'ok', info: r.info, saved: false, ref, swapped };
+      }
+      if (r?.suggestions && !suggestions.length) suggestions = r.suggestions;
+      await save(`mw-${ref}`, word, { info: null, suggestions: r?.suggestions || [] });
+    } catch (err) {
+      console.warn(err);
+      offline = true;
+    }
+  }
+  if (!offline) return { status: 'none', suggestions };
+  const pack = await packLookup(word).catch(() => null);
+  if (pack) return { status: 'ok', info: pack.info, saved: false, fallback: true };
+  return { status: 'offline' };
+}
+
+export async function lookupIn(src, word, opts = {}) {
   if (src === 'mw' && !hasMWKeys()) return { status: 'nokey' };
+  if (src === 'mw') return mwLookupIn(word, opts.mwRef || mwChoice());
   if (src === 'pack') {
     const r = await packLookup(word).catch(() => null);
     return r ? { status: 'ok', info: r.info, saved: true } : { status: 'none', suggestions: [] };
@@ -401,18 +454,6 @@ export async function lookupIn(src, word) {
   if (rec && !rec.info && Date.now() - rec.at < RETRY_MISSING) return { status: 'none', suggestions: rec.suggestions || [] };
 
   try {
-    if (src === 'mw') {
-      const k = keys();
-      let suggestions = [];
-      for (const [ref, key] of [['learners', k.learners], ['collegiate', k.collegiate]]) {
-        if (!key) continue;
-        const r = await mwLookup(ref, key, word);
-        if (r?.info) { await save(src, word, { info: r.info }); return { status: 'ok', info: r.info, saved: false }; }
-        if (r?.suggestions && !suggestions.length) suggestions = r.suggestions;
-      }
-      await save(src, word, { info: null, suggestions });
-      return { status: 'none', suggestions };
-    }
     let r = await wikiLookup(word).catch(() => null);
     if (!r) r = await freeLookup(word).catch(() => null); // the older Wiktionary service, as a backup
     if (r?.info) { await save(src, word, { info: r.info }); return { status: 'ok', info: r.info, saved: false }; }
@@ -459,6 +500,8 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
   let tab = preferredTab();
   let results = {};   // tab → result for the current word
   let peek = {};      // tab → result looked up quietly for "the other dictionary has it"
+  let mwRef = mwChoice(); // Learner's or Collegiate, inside the Merriam-Webster tab
+  let mwResults = {}; // 'learners' / 'collegiate' → result
   const sheet = openSheet(`
     <nav class="def-tabs" role="tablist" aria-label="Dictionary">
       ${Object.entries(TABS).map(([k, [name]]) => `<button type="button" role="tab" data-tab="${k}"${k === 'pack' ? ' hidden' : ''}><b>${name}</b><small></small></button>`).join('')}
@@ -481,9 +524,10 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       const k = b.dataset.tab;
       const r = results[k];
       b.setAttribute('aria-selected', String(k === tab));
-      b.querySelector('small').textContent = !r ? TABS[k][1]
+      const sub = k === 'mw' ? MW_NAMES[(r?.status === 'ok' && r.ref) || mwRef] : TABS[k][1];
+      b.querySelector('small').textContent = !r ? sub
         : r.status === 'nokey' ? 'add keys' : r.status === 'none' ? 'not found'
-          : r.status === 'offline' ? 'no connection' : r.fallback ? 'offline pack' : TABS[k][1];
+          : r.status === 'offline' ? 'no connection' : r.fallback ? 'offline pack' : sub;
     });
   };
 
@@ -519,6 +563,18 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       <button type="button" data-tab="${o}">Show it</button></div>`;
   };
 
+  // Learner's · Collegiate switch inside the Merriam-Webster tab (when both keys are set).
+  const mwSwitch = res => {
+    if (tab !== 'mw') return '';
+    const k = keys();
+    const both = k.learners && k.collegiate;
+    const swapped = res?.swapped && res.ref ? `<p class="def-msg is-small">Not in ${MW_NAMES[mwRef]} — showing ${MW_NAMES[res.ref]}.</p>` : '';
+    if (!both) return swapped;
+    return `<div class="def-mw" role="radiogroup" aria-label="Merriam-Webster dictionary">
+      ${Object.entries(MW_NAMES).map(([r, n]) => `<button type="button" role="radio" data-mw="${r}" aria-checked="${mwRef === r}">${n}</button>`).join('')}
+    </div>${swapped}`;
+  };
+
   function render() {
     drawTabs();
     const res = results[tab];
@@ -537,6 +593,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
             ${i.phonetic ? `<span class="def-sub">${esc(i.phonetic)}</span>` : ''}${base}</div>
           ${i.audio ? `<button type="button" class="def-audio" data-def="audio" aria-label="Play pronunciation">${SPEAK}</button>` : ''}
         </div>
+        ${mwSwitch(res)}
         ${res.fallback ? '<p class="def-msg is-small">No connection — showing the offline dictionary.</p>' : ''}
         ${i.parts.map(([pos, defs]) => `
           <section class="def-part">
@@ -567,6 +624,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
     if (res.status === 'none') {
       box.innerHTML = `
         <div class="def-head"><div class="def-title"><h2>${esc(word)}</h2><span class="def-sub">Not in ${tab === 'pack' ? 'the offline dictionary' : TABS[tab][0]}</span></div></div>
+        ${mwSwitch(null)}
         ${otherHint()}
         ${chips('Did you mean', res.suggestions)}
         <p class="def-msg">Web-novel terms and names often aren’t in normal dictionaries.</p>
@@ -585,8 +643,13 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
   async function load(t) {
     const w = word;
     if (results[t]) return;
-    const res = await lookupIn(t, w);
+    const ref = mwRef;
+    const res = await lookupIn(t, w, { mwRef: ref });
     if (w !== word || !box.isConnected) return;
+    if (t === 'mw') {
+      mwResults[ref] = res;
+      if (ref !== mwRef) return; // switched while it loaded
+    }
     results[t] = res;
     if (t === tab) {
       // When this dictionary can't help, quietly check the other one for the "Show it" hint.
@@ -604,6 +667,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
     word = w;
     results = {};
     peek = {};
+    mwResults = {};
     render();
     load(tab);
   }
@@ -616,6 +680,15 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       sheet.scrollTop = 0;
       render();
       load(tab);
+      return;
+    }
+    const mw = e.target.closest('[data-mw]');
+    if (mw) {
+      mwRef = mw.dataset.mw;
+      setMwChoice(mwRef);
+      results.mw = mwResults[mwRef];
+      render();
+      load('mw');
       return;
     }
     const again = e.target.closest('[data-def-word]');

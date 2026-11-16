@@ -867,12 +867,14 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   let cxEntries = [];
   async function refreshNotes() {
     const [list, tags, entries] = await Promise.all([db.getNotesOfChapter(id), db.getAllTags(), db.getCodexOfSeries(series.id)]);
-    cxEntries = entries;
+    const schema = await codex.schemaOf(series.id, entries);
+    // Only what you knew by this chapter (re-reading Ch. 5 hides what you learned in Ch. 9).
+    cxEntries = schema ? codex.knownAt(entries, schema, chapter.number) : [];
     codex.clearNames(textEl);
     notes.clearMarks(textEl);
     notes.applyMarks(paras, list, tags);
     // Codex names get a dotted underline (after the note marks, which use text positions).
-    if (settings.codexNames !== false) codex.applyNames(paras, entries);
+    if (settings.codexNames !== false && schema) codex.applyNames(paras, cxEntries, schema);
   }
   function jumpTo(noteId) {
     const marks = textEl.querySelectorAll(`mark[data-note="${noteId}"]`);
@@ -1022,6 +1024,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     const name = e.target.closest('span.cx-name');
     if (name) {
       codex.openPeek(Number(name.dataset.entry), {
+        asOf: chapter.number,
         onNote: mark ? () => notes.openNoteCard(Number(mark.dataset.note), noteCtx) : null,
         noteLabel: 'Open note',
       });
@@ -1057,7 +1060,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     restore,
     refreshNotes,
     chapterNotes: () => notes.openChapterNotes(noteCtx),
-    openCodex: () => codex.openReaderCodex({ seriesId: series.id, chapterText: paras.map(p => p.textContent).join('\n'), onChanged: refreshNotes }),
+    openCodex: () => codex.openReaderCodex({ seriesId: series.id, chapterText: paras.map(p => p.textContent).join('\n'), asOf: chapter.number, onChanged: refreshNotes }),
     relock: () => (settings.keepAwake ? lockScreen() : unlockScreen()),
   };
 
@@ -1083,10 +1086,11 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       try { await navigator.clipboard.writeText(sel.quote); toast('Copied'); } catch { toast('Couldn’t copy'); }
     } else if (action === 'codex') {
       const known = codex.entryNamed(cxEntries, sel.quote);
-      if (known) codex.openPeek(known.id);
+      if (known) codex.openPeek(known.id, { asOf: chapter.number });
       else {
         codex.openEntryEditor({
           seriesId: series.id,
+          ctx: chapter.number,
           name: sel.quote.replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/['’]s$/u, '').slice(0, 80),
           onSaved: refreshNotes,
         });
@@ -1101,6 +1105,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
         onFind: w => find.openFind({ term: w || dictionary.cleanWord(sel.quote), chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch }),
         onCodex: () => codex.openEntryEditor({
           seriesId: series.id,
+          ctx: chapter.number,
           name: sel.quote.replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/['’]s$/u, ''),
           onSaved: refreshNotes,
         }),
@@ -1323,8 +1328,8 @@ async function renderImport() {
       <span class="ico">${I.file}</span>
       <strong>Add chapters</strong>
       <p>${canPickFolder
-        ? 'Pick a whole folder or single files. Every .txt inside, subfolders too, goes to the review screen first.'
-        : 'Pick one or many .txt files (in the picker: ⋮ → Select all). You check everything before it’s saved.'}</p>
+        ? 'Pick a whole folder or single files. Every .txt inside, subfolders too, goes to the review screen first. Codex files (.codex.json) work here too.'
+        : 'Pick one or many .txt files (in the picker: ⋮ → Select all). You check everything before it’s saved. Codex files (.codex.json) work here too.'}</p>
       <div class="btn-stack">
         ${canPickFolder ? `<button type="button" class="btn btn-accent" data-action="pick-folder">${I.folder} Choose folder</button>` : ''}
         <button type="button" class="btn ${canPickFolder ? '' : 'btn-accent'}" data-action="pick-files">${I.fileSm} Choose files</button>
@@ -1347,9 +1352,20 @@ folderInput.addEventListener('change', () => {
 async function handleFiles(fileList) {
   const target = importTarget;
   importTarget = null;
-  const files = [...fileList].filter(f =>
-    !f.name.startsWith('.') && (/\.txt$/i.test(f.name) || f.type === 'text/plain'));
-  if (!files.length) { toast('No .txt files found'); return; }
+  const all = [...fileList].filter(f => !f.name.startsWith('.'));
+  const files = all.filter(f => /\.txt$/i.test(f.name) || f.type === 'text/plain');
+  // Codex files (.codex.json): the rooms of a series' Codex.
+  const codexItems = [];
+  for (const f of all.filter(x => /\.json$/i.test(x.name))) {
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { toast(`“${f.name}” isn’t valid JSON`); continue; }
+    if (!codex.isCodexData(data)) { toast(`“${f.name}” isn’t a Codex file`); continue; }
+    const r = codex.readCodexFile(data, f.name);
+    if (!r.ok) { toast(`${f.name}: ${r.errors[0]}`); continue; }
+    const seriesName = target ? target.name : r.structure.series;
+    codexItems.push({ fileName: f.name, structure: r.structure, warnings: r.warnings, seriesName, seriesKey: nameKey(seriesName), include: true });
+  }
+  if (!files.length && !codexItems.length) { toast('No .txt chapters or Codex files found'); return; }
   if (files.length > 20) toast(`Reading ${files.length} files…`);
 
   const items = [];
@@ -1362,9 +1378,9 @@ async function handleFiles(fileList) {
       console.warn('Could not read', file.name, err);
     }
   }
-  if (!items.length) { toast('No readable chapters in those files'); return; }
+  if (!items.length && !codexItems.length) { toast('No readable chapters in those files'); return; }
   await checkDuplicates(items);
-  showReview(items);
+  showReview(items, codexItems);
 }
 
 /** Mark chapters already in the library, or picked twice in this batch. */
@@ -1386,7 +1402,7 @@ async function checkDuplicates(items) {
 
 const willImport = it => (it.dup ? it.action === 'replace' : it.include && it.number != null);
 
-function showReview(items) {
+function showReview(items, codexItems = []) {
   const root = document.createElement('div');
   root.className = 'review';
   root.setAttribute('role', 'dialog');
@@ -1399,20 +1415,31 @@ function showReview(items) {
   async function draw() {
     const groups = new Map();
     items.forEach((it, i) => {
-      const g = groups.get(it.seriesKey) || { name: it.seriesName, existing: it.existingSeries, list: [] };
+      const g = groups.get(it.seriesKey) || { name: it.seriesName, existing: it.existingSeries, list: [], codex: [] };
       g.list.push([it, i]);
       groups.set(it.seriesKey, g);
     });
     const existing = await Promise.all([...groups.keys()].map(k => db.getSeriesByKey(k)));
     const seriesByKey = new Map([...groups.keys()].map((k, i) => [k, existing[i]]));
+    // Codex files join their series' group (or get their own, for series already in the library).
+    for (const [ci, cx] of codexItems.entries()) {
+      if (!groups.has(cx.seriesKey)) {
+        const s = await db.getSeriesByKey(cx.seriesKey);
+        groups.set(cx.seriesKey, { name: s?.name || cx.seriesName, existing: !!s, list: [], codex: [], onlyCodex: true, missing: !s });
+        seriesByKey.set(cx.seriesKey, s);
+      }
+      groups.get(cx.seriesKey).codex.push([cx, ci]);
+      cx.usable = !groups.get(cx.seriesKey).missing;
+    }
     const dupCount = items.filter(it => it.dup).length;
     const newCountNow = items.filter(it => !it.dup && it.number != null).length;
     const total = items.filter(willImport).length;
+    const codexTotal = codexItems.filter(c => c.include && c.usable).length;
 
     root.innerHTML = `<div class="review-inner">
       <div class="review-head">
         <button type="button" class="icon-btn" data-review="cancel" aria-label="Cancel import">${I.close}</button>
-        <div><h1>Review import</h1><small>${plural(items.length, 'file')} · ${groups.size} series</small></div>
+        <div><h1>Review import</h1><small>${plural(items.length + codexItems.length, 'file')} · ${groups.size} series</small></div>
       </div>
       <div class="chips">
         ${newCountNow ? `<span class="chip"><i></i>${plural(newCountNow, 'new chapter')}</span>` : ''}
@@ -1423,12 +1450,24 @@ function showReview(items) {
           <div class="group-head">
             ${cover(seriesByKey.get(key) || g.name, 'sm')}
             <span class="info">
-              ${g.existing
-                ? `<span class="name">${esc(g.name)}</span><span class="kind">Adding to existing series</span>`
+              ${g.existing || g.onlyCodex
+                ? `<span class="name">${esc(g.name)}</span><span class="kind${g.missing ? ' warn' : ''}">${g.missing ? 'Not in your library' : g.onlyCodex ? 'Existing series' : 'Adding to existing series'}</span>`
                 : `<input class="name" data-rename="${esc(key)}" value="${esc(g.name)}" aria-label="Series name">
                    <span class="kind new">New series</span>`}
             </span>
           </div>
+          ${g.codex.map(([cx, ci]) => `
+            <div class="cx-import${cx.usable ? '' : ' is-off'}">
+              <label class="cx-import-head">
+                <input type="checkbox" data-cxinc="${ci}" ${cx.include && cx.usable ? 'checked' : ''} ${cx.usable ? '' : 'disabled'}>
+                <span class="ico">${codex.CODEX_ICON}</span>
+                <span class="t"><b>Codex structure</b><small>${esc(cx.fileName)} · ${plural(cx.structure.types.length, 'room')} · no entries</small></span>
+              </label>
+              ${cx.usable ? codex.structureSummaryHtml(cx.structure)
+                : `<p class="hint" style="margin:0">Import this series’ chapters first (they can be in the same import), or check that the "series" name in the file matches exactly.</p>`}
+              ${cx.warnings.length ? `<details class="cx-warn"><summary>${plural(cx.warnings.length, 'small fix', 'small fixes')} made</summary><ul>${cx.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}
+              ${cx.usable ? '<p class="hint" style="margin:0">The rooms start empty — you add entries while reading. Entries you already have stay.</p>' : ''}
+            </div>`).join('')}
           ${g.list.sort((a, b) => (a[0].number ?? 1e9) - (b[0].number ?? 1e9)).map(([it, i]) => it.dup ? `
             <div class="item">
               <span style="width:20px;color:var(--danger);display:flex">${I.copy}</span>
@@ -1451,8 +1490,10 @@ function showReview(items) {
         </section>`).join('')}
     </div>`;
 
-    bar.innerHTML = `<button type="button" class="btn btn-accent" data-review="import" ${total ? '' : 'disabled'}>
-      ${I.check} Import ${plural(total, 'chapter')}</button>`;
+    const label = total && codexTotal ? `Import ${plural(total, 'chapter')} + Codex`
+      : total ? `Import ${plural(total, 'chapter')}` : codexTotal ? (codexTotal === 1 ? 'Set up the Codex' : `Set up ${codexTotal} Codexes`) : 'Nothing to import';
+    bar.innerHTML = `<button type="button" class="btn btn-accent" data-review="import" ${total || codexTotal ? '' : 'disabled'}>
+      ${I.check} ${label}</button>`;
   }
 
   root.addEventListener('click', e => {
@@ -1463,6 +1504,7 @@ function showReview(items) {
   root.addEventListener('change', async e => {
     const t = e.target;
     if (t.dataset.inc != null) { items[Number(t.dataset.inc)].include = t.checked; draw(); }
+    if (t.dataset.cxinc != null) { codexItems[Number(t.dataset.cxinc)].include = t.checked; draw(); }
     if (t.dataset.num != null) {
       const v = parseFloat(t.value);
       items[Number(t.dataset.num)].number = Number.isFinite(v) ? v : null;
@@ -1472,6 +1514,7 @@ function showReview(items) {
       const name = t.value.replace(/\s+/g, ' ').trim();
       if (!name) { draw(); return; }
       items.filter(it => it.seriesKey === t.dataset.rename).forEach(it => { it.seriesName = name; });
+      codexItems.filter(c => c.seriesKey === t.dataset.rename).forEach(c => { c.seriesName = name; c.seriesKey = nameKey(name); });
       await checkDuplicates(items); draw();
     }
   });
@@ -1489,10 +1532,19 @@ function showReview(items) {
         console.error('Import failed for', it.fileName, err);
       }
     }
+    // Codex structures, now that their series exist.
+    let codexDone = 0;
+    for (const cx of codexItems.filter(c => c.include && c.usable)) {
+      const s = await db.getSeriesByKey(cx.seriesKey);
+      if (!s) continue;
+      await codex.applyStructure(s.id, cx.structure, cx.fileName);
+      seriesIds.add(s.id);
+      codexDone += 1;
+    }
     // Ask Chrome not to clear this app's data during automatic cleanups.
     navigator.storage?.persist?.().catch(() => {});
-    toast(`Imported ${plural(saved, 'chapter')}`);
-    const dest = seriesIds.size === 1 ? `#/series/${[...seriesIds][0]}` : '#/';
+    toast([saved ? `Imported ${plural(saved, 'chapter')}` : '', codexDone ? `${codexDone === 1 ? 'Codex' : `${codexDone} Codexes`} set up` : ''].filter(Boolean).join(' · ') || 'Nothing imported');
+    const dest = seriesIds.size === 1 ? `#/series/${[...seriesIds][0]}${codexDone && !saved ? '/codex' : ''}` : '#/';
     const samePage = location.hash === dest || (dest === '#/' && !location.hash);
     closeOverlay({ navTo: dest });
     if (samePage) route(); // no hash change, so redraw by hand
