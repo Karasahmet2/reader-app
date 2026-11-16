@@ -883,7 +883,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
         ${row('all', `<span class="series-pick-ico">${I.notes}</span>`, 'All series', `${plural(everyNote.length, 'note')}, grouped by series`)}
         ${list.map(s => row(s.id, coverHtml(s), s.name, plural(noteCount.get(s.id) || 0, 'note'))).join('')}
       </div>
-      <p class="hint">A series page’s menu → Notes & tags opens straight to that series.</p>`, sheet => {
+      <p class="hint tip">A series page’s menu → Notes & tags opens straight to that series.</p>`, sheet => {
       sheet.addEventListener('click', e => {
         const b = e.target.closest('[data-pick-series]');
         if (!b) return;
@@ -1027,7 +1027,7 @@ function openNotesSort(onChanged) {
           <input type="radio" name="nsort" value="${k}" ${notesState.sort === k ? 'checked' : ''}>
         </label>`).join('')}
     </div>
-    <p class="hint">Inside each series, notes are always in reading order.</p>`, sheet => {
+    <p class="hint tip">Inside each series, notes are always in reading order.</p>`, sheet => {
     sheet.addEventListener('change', e => {
       if (e.target.name !== 'nsort') return;
       notesState.sort = e.target.value;
@@ -1096,7 +1096,7 @@ export async function openTagManager(onChanged, focusSeriesId = null) {
     </section>`;
   };
 
-  const notesTag = '<p class="hint">Every series has its own tags (also on each series page → Tags). Colors only need to differ within one series. ⋯ on a tag: delete it (its notes stay).</p>';
+  const notesTag = '<p class="hint tip">Every series has its own tags (also on each series page → Tags). Colors only need to differ within one series. ⋯ on a tag: delete it (its notes stay).</p>';
 
   openSheet(`<h2>Tags</h2>${notesTag}<div class="tag-sections"></div>`, sheet => {
     const box = sheet.querySelector('.tag-sections');
@@ -1344,7 +1344,7 @@ export async function openVisibility({ seriesId, noteList, onChange, codex = nul
         ${tags.map(t => row('data-vis', String(t.id), `<i class="vis-dot" style="background:${tagColor(t.color)}"></i>`, t.name, sub(String(t.id)), !h.tags.has(t.id))).join('')}
         ${row('data-vis', 'hl', '<i class="vis-dot is-hl"></i>', tags.length ? 'Highlights & untagged' : 'All notes and highlights', sub('hl'), !h.highlights)}
       </div>
-      <p class="hint" style="margin:0">Remembered for this series. Hidden notes are still there — this only clears the text. A note you add under a hidden tag stays visible until you switch that tag again.</p>`;
+      <p class="hint tip" style="margin:0">Remembered for this series. Hidden notes are still there — this only clears the text. A note you add under a hidden tag stays visible until you switch that tag again.</p>`;
   };
   const codexHtml = () => {
     const h = codex.hidden();
@@ -1352,7 +1352,7 @@ export async function openVisibility({ seriesId, noteList, onChange, codex = nul
         ${codex.rooms.map(r => row('data-room', r.id, `<span class="vis-room" style="--cx:${tagColor(r.color)}">${r.icon}</span>`, r.name,
           r.count ? `${plural(r.count, 'name')} in this chapter` : 'none in this chapter', !h.has(r.id))).join('')}
       </div>
-      <p class="hint" style="margin:0">${codex.off ? 'Codex names are switched off in Settings, so none are marked right now. ' : ''}A room that’s off stops marking its names in the text. Entries stay in the Codex. Remembered for this series.</p>`;
+      <p class="hint tip" style="margin:0">A room that’s off stops marking its names in the text. Entries stay in the Codex. Remembered for this series.</p>`;
   };
   const html = () => `
     <div class="snd-head"><h2>Show in text</h2>

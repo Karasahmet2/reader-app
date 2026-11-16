@@ -10,7 +10,7 @@
 //
 // ► After changing ANY file, bump VERSION (reader-v16, reader-v17, …) so phones update.
 
-const VERSION = 'reader-v19';
+const VERSION = 'reader-v20';
 const APP_FILES = [
   './',
   './index.html',

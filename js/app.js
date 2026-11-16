@@ -666,7 +666,7 @@ function openStatusSheet() {
           <input type="radio" name="status" value="${k}" ${statusOf(s) === k ? 'checked' : ''}>
         </label>`).join('')}
     </div>
-    <p class="hint">A series switches to Waiting by itself when you finish its last chapter, and back to Reading when new chapters are imported.</p>`, sheet => {
+    <p class="hint tip">A series switches to Waiting by itself when you finish its last chapter, and back to Reading when new chapters are imported.</p>`, sheet => {
     sheet.addEventListener('change', async e => {
       if (e.target.name !== 'status') return;
       await db.updateSeries(s.id, { status: e.target.value });
@@ -910,7 +910,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     document.querySelector('.vis-btn')?.classList.toggle('is-filtered', notes.anyHidden(series.id) || offRooms.size > 0);
     // Codex names get a dotted underline (after the note marks, which use text positions);
     // rooms switched off under "Show in text" are left out.
-    if (settings.codexNames !== false && schema) codex.applyNames(paras, cxEntries.filter(e => !offRooms.has(e.type)), schema);
+    if (schema) codex.applyNames(paras, cxEntries.filter(e => !offRooms.has(e.type)), schema);
   }
   function jumpTo(noteId) {
     const marks = textEl.querySelectorAll(`mark[data-note="${noteId}"]`);
@@ -1106,7 +1106,6 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
           rooms: cxSchema.types.map(t => ({ id: t.id, name: t.plural || t.name, color: t.color, icon: codex.roomIcon(t), count: byType.get(t.id) || 0 })),
           hidden: () => codex.hiddenRooms(series.id),
           setHidden: set => codex.setHiddenRooms(series.id, set),
-          off: settings.codexNames === false,
         };
       }
       notes.openVisibility({ seriesId: series.id, noteList: chapterNoteList, onChange: refreshNotes, codex: cx });
@@ -1223,7 +1222,7 @@ function themeTilesHtml() {
       </div>`;
     }).join('')}
   </div>
-  <p class="hint" style="padding:0">★ = in the reader’s theme button. Tap a star to add or remove.</p></div>`;
+  <p class="hint tip" style="padding:0">★ = in the reader’s theme button. Tap a star to add or remove.</p></div>`;
 }
 
 function accentSwatchesHtml() {
@@ -1382,10 +1381,11 @@ async function renderImport() {
     <div class="row-head"><h1 class="page-title">Import</h1></div>
     <section class="drop-card" aria-label="Choose files">
       <span class="ico">${I.file}</span>
-      <strong>Add chapters</strong>
-      <p>${canPickFolder
-        ? 'Pick a whole folder or single files. Every .txt inside, subfolders too, goes to the review screen first. Codex files (.codex.json) work here too.'
-        : 'Pick one or many .txt files (in the picker: ⋮ → Select all). You check everything before it’s saved. Codex files (.codex.json) work here too.'}</p>
+      <strong>Add files</strong>
+      <p>Chapters (.txt) and Codex files (.codex.json)</p>
+      <p class="hint tip">${canPickFolder
+        ? 'Pick a whole folder or single files. Every .txt inside, subfolders too, goes to the review screen first.'
+        : 'Pick one or many files (in the picker: ⋮ → Select all). You check everything before it’s saved.'}</p>
       <div class="btn-stack">
         ${canPickFolder ? `<button type="button" class="btn btn-accent" data-action="pick-folder">${I.folder} Choose folder</button>` : ''}
         <button type="button" class="btn ${canPickFolder ? '' : 'btn-accent'}" data-action="pick-files">${I.fileSm} Choose files</button>
@@ -1522,7 +1522,7 @@ function showReview(items, codexItems = []) {
               ${cx.usable ? codex.structureSummaryHtml(cx.structure)
                 : `<p class="hint" style="margin:0">Import this series’ chapters first (they can be in the same import), or check that the "series" name in the file matches exactly.</p>`}
               ${cx.warnings.length ? `<details class="cx-warn"><summary>${plural(cx.warnings.length, 'small fix', 'small fixes')} made</summary><ul>${cx.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}
-              ${cx.usable ? '<p class="hint" style="margin:0">The rooms start empty — you add entries while reading. Entries you already have stay.</p>' : ''}
+              ${cx.usable ? '<p class="hint tip" style="margin:0">The rooms start empty — you add entries while reading. Entries you already have stay.</p>' : ''}
             </div>`).join('')}
           ${g.list.sort((a, b) => (a[0].number ?? 1e9) - (b[0].number ?? 1e9)).map(([it, i]) => it.dup ? `
             <div class="item">
@@ -1725,8 +1725,8 @@ async function renderSettings() {
           <input type="checkbox" role="switch" data-toggle="showFooter" ${settings.showFooter !== false ? 'checked' : ''}>
         </label>
         <label class="set-row">
-          <span class="txt"><b>Underline Codex names</b><small>Dotted line under characters, places… you added; tap for a quick card</small></span>
-          <input type="checkbox" role="switch" data-toggle="codexNames" ${settings.codexNames !== false ? 'checked' : ''}>
+          <span class="txt"><b>Show tips</b><small>Short how-to explanations around the app</small></span>
+          <input type="checkbox" role="switch" data-toggle="showTips" ${settings.showTips !== false ? 'checked' : ''}>
         </label>
       </div>
     </section>
@@ -1830,7 +1830,7 @@ async function renderBackup() {
     <div class="backup-actions">
       <button type="button" class="btn btn-accent" data-action="create-backup" ${count.series ? '' : 'disabled'}>${I.download} Create backup file</button>
       <button type="button" class="btn" data-action="restore-backup">${I.upload} Restore from a backup</button>
-      <p class="hint" style="text-align:center">The file is saved to your Downloads folder. Keep a copy in Google Drive or on your computer to be extra safe.</p>
+      <p class="hint tip" style="text-align:center">The file is saved to your Downloads folder. Keep a copy in Google Drive or on your computer to be extra safe.</p>
     </div>
   </main>`;
 
@@ -2035,6 +2035,20 @@ sounds.onChange(() => document.querySelectorAll('.snd-btn')
 notes.migrateTagColors()
   .then(() => notes.migrateTagScopes()) // Update 5: series tags and shared tags
   .then(() => notes.migrateNoShared()) // Update 10: every tag belongs to one series
+  .then(async () => {
+    // Update 13: "Underline Codex names" left Settings — if it was off, switch every room off
+    // in each series' "Show in text" panel instead, so nothing suddenly lights up.
+    if (!('codexNames' in settings)) return;
+    if (settings.codexNames === false) {
+      for (const s of await db.getAllSeries()) {
+        const types = s.codex?.types?.map(t => t.id) || [];
+        if (types.length) codex.setHiddenRooms(s.id, new Set(types));
+      }
+    }
+    const { codexNames, ...rest } = settings;
+    settings = rest;
+    saveSettings(settings);
+  })
   .then(() => trash.purge(settings.trashDays ?? 30).catch(() => {}))
   .catch(err => console.warn('Tags not updated', err))
   .finally(route);

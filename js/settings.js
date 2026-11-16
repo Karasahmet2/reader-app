@@ -101,7 +101,7 @@ export const DEFAULTS = {
   libFilter: 'all',    // all | reading | waiting | finished
   // Reader
   showFooter: true,    // percent and time left at the bottom while reading
-  codexNames: true,    // dotted underline under Codex names in the reader
+  showTips: true,      // how-to hints around the app (Settings → Reading → Show tips)
   mwLearnersKey: '',   // Merriam-Webster Learner's Dictionary key (Define)
   mwCollegiateKey: '', // Merriam-Webster Collegiate Dictionary key (Define)
   // Backup
@@ -140,6 +140,7 @@ export function applySettings(s) {
   const light = !!theme.light;
   root.dataset.theme = theme.id;
   root.dataset.light = String(light);
+  root.classList.toggle('no-tips', s.showTips === false); // Settings → Show tips
   root.style.setProperty('--accent', light ? accent.paper : accent.dark);
   root.style.setProperty('--on-accent', light ? '#f7f3ec' : '#1b1a18');
   root.style.setProperty('--selection', light ? accent.selPaper : accent.selDark);

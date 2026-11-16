@@ -2133,3 +2133,18 @@ mark.note-mark .cx-name { text-decoration-line: underline; }
 body:has(.is-selecting) #toast { bottom: calc(100px + var(--safe-bottom, 0px)); }
 body:has(.is-selecting) #toast.has-action { bottom: calc(92px + var(--safe-bottom, 0px)); }
 .cx-chips .range-chip { flex-shrink: 0; }
+
+/* Update 13 · Show tips off, short entry line, quick card header */
+.no-tips .tip { display: none !important; }
+.no-tips .cx-change { gap: 0; }
+.cx-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cx-sub > span[aria-hidden] { color: var(--muted); }
+.cx-chlink {
+  height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px;
+  background: rgba(0,0,0,.25); border-radius: 14px; color: var(--accent); font: 600 13px var(--ui-font); text-decoration: none;
+}
+button.cx-peek-head { width: calc(100% + 12px); margin: -6px; padding: 6px; display: flex; align-items: center; gap: 14px; background: none; border: 0; border-radius: 16px; text-align: left; color: inherit; font: inherit; }
+button.cx-peek-head:active { background: var(--surface-2); }
+button.cx-peek-head .txt { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+button.cx-peek-head > svg { color: var(--muted); flex-shrink: 0; }
+.cx-peek-row b { font-weight: 400; color: var(--strong); }

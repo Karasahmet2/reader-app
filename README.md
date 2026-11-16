@@ -202,6 +202,17 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 13 — Shorter entry line, "Add files", Show tips
+
+- Codex entries say just "Character · Ch. 1" (the "Known from" chapter); tap Ch. 1 to open that
+  chapter. How often a name appears is under Find every mention.
+- The reader's quick card uses the same line; tap the name row to open the entry.
+- Import: the button is now "Add files" (chapters and Codex files).
+- Settings → Reading → **Show tips**: switch off the how-to explanations. Status messages, empty
+  pages and warnings stay.
+- "Underline Codex names" left Settings: use the reader's eye button → Codex → All off instead
+  (if it was off, every room is switched off there automatically).
+
 ## Update 12 — Codex sorting, getting back, select & delete, Trash
 
 - **Codex tab**: search (also matches other names), room chips with counts (tap several to combine),
@@ -316,7 +327,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v19` → `reader-v20`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v20` → `reader-v21`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

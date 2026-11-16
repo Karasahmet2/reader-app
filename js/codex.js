@@ -469,7 +469,7 @@ function confirmStructure(seriesId, data, fileName, onDone) {
     <p class="hint" style="margin:0">${esc(fileName)} · ${plural(r.structure.types.length, 'room')}${r.structure.series ? ` · made for “${esc(r.structure.series)}”` : ''}</p>
     ${structureSummaryHtml(r.structure)}
     ${r.warnings.length ? `<details class="cx-warn"><summary>${plural(r.warnings.length, 'small fix', 'small fixes')} made</summary><ul>${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}
-    <p class="hint" style="margin:0">The rooms start empty. Entries you already have stay.</p>
+    <p class="hint tip" style="margin:0">The rooms start empty. Entries you already have stay.</p>
     <div class="two-btns"><button type="button" class="btn" data-cs="no">Cancel</button>
       <button type="button" class="btn btn-accent" data-cs="yes">Set up the Codex</button></div>`, sheet => {
     sheet.addEventListener('click', async e => {
@@ -490,7 +490,7 @@ function openPresets(seriesId, onDone) {
     <h2>Ready-made structures</h2>
     <div class="cx-presets">${Object.entries(PRESETS).map(([k, p]) => `
       <button type="button" data-preset="${k}"><b>${esc(p.name)}</b><small>${esc(p.description)}</small></button>`).join('')}</div>
-    <p class="hint" style="margin:0">You can import a file made for this book later; your entries stay.</p>`, sheet => {
+    <p class="hint tip" style="margin:0">You can import a file made for this book later; your entries stay.</p>`, sheet => {
     sheet.addEventListener('click', async e => {
       const b = e.target.closest('[data-preset]');
       if (!b) return;
@@ -579,7 +579,7 @@ function openCodexSort(seriesId, onChanged) {
         <span class="txt">${o.name}<small>${o.hint}</small></span>
         <input type="radio" name="cxsort" value="${k}" ${v.sort === k ? 'checked' : ''}></label>`).join('')}
     </div>
-    <p class="hint">Remembered for this series, together with the rooms you picked.</p>`, sheet => {
+    <p class="hint tip">Remembered for this series, together with the rooms you picked.</p>`, sheet => {
     sheet.addEventListener('change', e => {
       v.sort = e.target.value;
       saveCodexView(seriesId, v);
@@ -908,6 +908,9 @@ export async function renderEntryPage(app, id) {
   const linkedNotes = notesOf.filter(n => n.seriesId === entry.seriesId
     && names.some(nm => `${n.quote} ${n.text}`.toLowerCase().includes(nm)));
   const known = visible(entry, asOf);
+  // The chapter it first appeared in ("Known from"); the earliest chapter when that's not set.
+  const sorted = [...chapters].sort((a, b) => a.number - b.number);
+  const firstCh = sorted.find(c => c.number === entry.since) || sorted.find(c => c.number >= (entry.since || 0)) || null;
   const ret = selecting ? '' : await returnBarHtml(entry, map);
   const n = sel?.keys.size || 0;
 
@@ -923,7 +926,9 @@ export async function renderEntryPage(app, id) {
     ${ret}`}
     <div class="cx-hero">${avatarIn(schema, entry, 64)}
       <div class="txt"><h1>${esc(entry.name)}</h1>
-        <small>${esc(t.name)}${entry.since ? ` · known from Ch. ${fmtNum(entry.since)}` : ''} · <span id="cx-seen"></span></small></div>
+        <small class="cx-sub">${esc(t.name)} <span aria-hidden="true">·</span> ${firstCh
+          ? `<a class="cx-chlink" href="#/read/${firstCh.id}">${svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/>', 13, 2)}Ch. ${fmtNum(firstCh.number)}</a>`
+          : `Ch. ${fmtNum(entry.since || 1)}`}</small></div>
     </div>
     ${schema?.hideLater && !selecting ? `<div class="cx-viewas">
       <div class="cx-va-row">${svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', 18)}
@@ -947,7 +952,7 @@ export async function renderEntryPage(app, id) {
         <button type="button" class="btn" data-sel="exit">Cancel</button>
         <button type="button" class="btn sel-del" data-sel="delete"${n ? '' : ' disabled'}>${I.trashSm} Delete${n ? ` ${n}` : ''}</button></div>`
       : `<button type="button" class="btn cx-find" data-cxa="find">${I.searchSm} Find every mention</button>
-         <p class="hint cx-tip">Tip: long-press a value or connection to select several and delete them together.</p>`}
+         <p class="hint tip cx-tip">Tip: long-press a value or connection to select several and delete them together.</p>`}
   </main>`;
 
   const main = app.querySelector('main');
@@ -1021,10 +1026,6 @@ export async function renderEntryPage(app, id) {
     }
   });
 
-  firstSeen(entry).then(info => {
-    const el = app.querySelector('#cx-seen');
-    if (el && info) el.textContent = info;
-  });
 }
 
 function card(label, inner) {
@@ -1105,25 +1106,6 @@ export function openChapterPicker({ title, sub, chapters, value, quick = [], onP
     sheet.addEventListener('submit', pick);
     showPicked(sheet);
   });
-}
-
-async function firstSeen(entry) {
-  const chapters = await db.getChaptersOfSeries(entry.seriesId);
-  const wanted = new Map(chapters.map(c => [c.id, c]));
-  const names = [entry.name, ...(entry.aliases || [])].filter(n => n && n.length >= 2);
-  if (!names.length) return '';
-  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${names.map(escapeRe).join('|')})(?![\\p{L}\\p{N}])`, 'u');
-  let first = null;
-  let count = 0;
-  await db.forEachText((cid, paragraphs) => {
-    const c = wanted.get(cid);
-    if (!c) return;
-    if (paragraphs.some(p => re.test(p))) {
-      count++;
-      if (!first || c.number < first.number) first = c;
-    }
-  });
-  return first ? `named first in Ch. ${fmtNum(first.number)} · in ${plural(count, 'chapter')}` : 'not named in any chapter yet';
 }
 
 /* ------------------------------------------------------------------ add / edit */
@@ -1238,11 +1220,11 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       <label class="cx-efield"><span class="label">Also called</span>
         <input class="text-input" data-f="aliases" value="${esc((draft.aliases || []).join(', '))}" placeholder="Other names, separated by commas" autocomplete="off"></label>
       ${entry ? `<div class="cx-change">${chBtn('change', 'New details from', changeAt, PLUS)}
-        <small>New values and new connections count from this chapter. Tap any row below to change it.</small></div>` : ''}
+        <small class="tip">New values and new connections count from this chapter. Tap any row below to change it.</small></div>` : ''}
       ${t.fields.map(f => (f.kind === 'link' ? linkField(f) : textField(f))).join('')}
       <label class="cx-efield"><span class="label">About</span>
         <textarea class="text-area" data-f="about" rows="3" placeholder="Anything worth remembering…">${esc(draft.about || '')}</textarea></label>
-      <p class="hint" style="margin:0">Only the name is needed. When you re-read earlier chapters, things you learned later stay hidden.</p>
+      <p class="hint tip" style="margin:0">Only the name is needed. When you re-read earlier chapters, things you learned later stay hidden.</p>
       <div class="two-btns">
         <button type="button" class="btn" data-ed="cancel">Cancel</button>
         <button type="button" class="btn btn-accent" data-ed="save">${entry ? 'Save' : 'Add'}</button>
@@ -1541,12 +1523,11 @@ export async function openPeek(id, { asOf = Infinity, onNote, noteLabel = 'Add a
   const build = upTo => {
     const rows = [];
     let hidden = 0;
-    let firstText = '';
     for (const f of t.fields) {
       if (f.kind !== 'link') {
         const r = textAt(entry, f.id, upTo);
         hidden += r.later;
-        if (r.value && !firstText && f.kind === 'text') firstText = r.value;
+        if (r.value && f.kind === 'text' && rows.length < 4) rows.push(`<div class="cx-peek-row"><span>${esc(f.label)}</span><b>${esc(r.value)}</b></div>`);
         continue;
       }
       for (const x of linkValues(entry, f.id)) {
@@ -1558,8 +1539,8 @@ export async function openPeek(id, { asOf = Infinity, onNote, noteLabel = 'Add a
       }
     }
     return `
-      <div class="cx-peek-head">${avatarIn(schema, entry, 48)}
-        <div class="txt"><b>${esc(entry.name)}</b><small>${esc(t.name)}${firstText ? ` · ${esc(firstText)}` : ''}</small></div></div>
+      <button type="button" class="cx-peek-head" data-pk="open" aria-label="Open ${esc(entry.name)}">${avatarIn(schema, entry, 48)}
+        <span class="txt"><b>${esc(entry.name)}</b><small>${esc(t.name)} · Ch. ${fmtNum(entry.since || 1)}</small></span>${svg('<path d="M9 5l7 7-7 7"/>', 20, 2)}</button>
       ${rows.join('')}
       ${entry.about ? `<p class="cx-about">${esc(entry.about.slice(0, 240))}</p>` : ''}
       ${hidden ? `<div class="cx-hidden">${LOCK}<span>${plural(hidden, 'thing')} you learn later ${hidden === 1 ? 'is' : 'are'} hidden — you’re at Ch. ${fmtNum(asOf)}.</span>
@@ -1576,7 +1557,7 @@ export async function openPeek(id, { asOf = Infinity, onNote, noteLabel = 'Add a
       if (a) { e.preventDefault(); fromReader(); closeOverlay({ navTo: a.getAttribute('href') }); return; }
       const b = e.target.closest('[data-pk]');
       if (b?.dataset.pk === 'show') { sheet.querySelector('.cx-peek').innerHTML = build(Infinity); return; }
-      if (b?.dataset.pk === 'open') { fromReader(); closeOverlay({ navTo: `#/codex/${entry.id}` }); }
+      if (b?.dataset.pk === 'open') { fromReader(); closeOverlay({ navTo: `#/codex/${entry.id}` }); return; }
       if (b?.dataset.pk === 'note') onNote(entry);
     });
   });
