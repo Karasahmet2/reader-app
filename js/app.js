@@ -460,12 +460,13 @@ function openSortSheet() {
 /* ------------------------------------------------------------------ series page */
 
 async function renderSeries(id, tab = 'chapters') {
-  if (!['chapters', 'notes', 'codex'].includes(tab)) tab = 'chapters';
+  if (!['chapters', 'notes', 'tags', 'codex'].includes(tab)) tab = 'chapters';
   const series = await db.getSeries(id);
   if (!series) throw new Error('This series no longer exists.');
   currentSeries = series;
-  const [chapters, progress, allNotes, entries] = await Promise.all([
-    db.getChaptersOfSeries(id), db.getAllProgress(), db.getAllNotes(), db.getCodexOfSeries(id)]);
+  const [chapters, progress, allNotes, entries, allTags] = await Promise.all([
+    db.getChaptersOfSeries(id), db.getAllProgress(), db.getAllNotes(), db.getCodexOfSeries(id), db.getAllTags()]);
+  const tagCount = allTags.filter(t => t.seriesId === id).length;
   const noteCount = allNotes.filter(n => n.seriesId === id).length;
   const ids = new Set(chapters.map(c => c.id));
   const prog = new Map(progress.filter(p => ids.has(p.chapterId)).map(p => [p.chapterId, p]));
@@ -537,7 +538,7 @@ async function renderSeries(id, tab = 'chapters') {
     </section>
     ${cta}
     <nav class="series-tabs" role="tablist" aria-label="Series sections">
-      ${[['chapters', 'Chapters', ''], ['notes', 'Notes', noteCount], ['codex', 'Codex', entries.length]].map(([k, label, n]) => `
+      ${[['chapters', 'Chapters', ''], ['notes', 'Notes', noteCount], ['tags', 'Tags', tagCount], ['codex', 'Codex', entries.length]].map(([k, label, n]) => `
         <button type="button" role="tab" aria-selected="${tab === k}" data-action="series-tab" data-tab="${k}">${label}${n ? ` <span class="count">${n}</span>` : ''}</button>`).join('')}
     </nav>
     ${tab !== 'chapters' ? '<div id="series-tab"></div>' : `<section class="chapter-list" aria-label="Chapters">
@@ -553,6 +554,7 @@ async function renderSeries(id, tab = 'chapters') {
   </main>`;
   const tabRoot = app.querySelector('#series-tab');
   if (tab === 'notes') await notes.renderNotes(app, '', s => cover(s, 'xs'), null, { seriesId: id, root: tabRoot });
+  if (tab === 'tags') await notes.renderTagsTab(tabRoot, id);
   if (tab === 'codex') await codex.renderCodexTab(tabRoot, id);
 }
 
@@ -821,6 +823,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     <header class="reader-top">
       <a class="icon-btn" href="#/series/${series.id}" aria-label="Back to series">${I.back}</a>
       <div class="titles"><b>${esc(series.name)}</b><span>Ch. ${n}${chapter.title ? ' · ' + esc(chapter.title) : ''}</span></div>
+      <button type="button" class="icon-btn vis-btn${notes.anyHidden(series.id) ? ' is-filtered' : ''}" data-action="notes-visibility" aria-label="Show or hide notes in the text">${I.note}</button>
       <button type="button" class="icon-btn snd-btn${sounds.isPlaying() ? ' is-playing' : ''}" data-action="open-sounds" aria-label="Background sounds">${sounds.HEADPHONES}</button>
       <a class="icon-btn" href="#/series/${series.id}" aria-label="Chapter list">${I.list}</a>
     </header>
@@ -865,14 +868,27 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   // ---- notes in this chapter ----
   const where = `${series.name} · Ch. ${n}`;
   let cxEntries = [];
+  let chapterNoteList = [];
+  /** After saving a note: if its tags are switched off, keep it visible for now and say so. */
+  async function afterNoteSaved(saved, isNew) {
+    let msg;
+    if (isNew && saved?.sp != null && notes.isHiddenByTags(saved, series.id)) {
+      notes.keepVisible(saved);
+      msg = 'Note saved · its tag is hidden, so it stays visible until you switch that tag again';
+    }
+    await refreshNotes();
+    return msg;
+  }
   async function refreshNotes() {
     const [list, tags, entries] = await Promise.all([db.getNotesOfChapter(id), db.getAllTags(), db.getCodexOfSeries(series.id)]);
     const schema = await codex.schemaOf(series.id, entries);
     // Only what you knew by this chapter (re-reading Ch. 5 hides what you learned in Ch. 9).
     cxEntries = schema ? codex.knownAt(entries, schema, chapter.number) : [];
     codex.clearNames(textEl);
+    chapterNoteList = list;
     notes.clearMarks(textEl);
-    notes.applyMarks(paras, list, tags);
+    notes.applyMarks(paras, notes.visibleNotes(list, series.id), tags); // tags you switched off stay out of the text
+    document.querySelector('.vis-btn')?.classList.toggle('is-filtered', notes.anyHidden(series.id));
     // Codex names get a dotted underline (after the note marks, which use text positions).
     if (settings.codexNames !== false && schema) codex.applyNames(paras, cxEntries, schema);
   }
@@ -1060,12 +1076,18 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     restore,
     refreshNotes,
     chapterNotes: () => notes.openChapterNotes(noteCtx),
+    openVisibility: () => notes.openVisibility({ seriesId: series.id, noteList: chapterNoteList, onChange: refreshNotes }),
     openCodex: () => codex.openReaderCodex({ seriesId: series.id, chapterText: paras.map(p => p.textContent).join('\n'), asOf: chapter.number, onChanged: refreshNotes }),
     relock: () => (settings.keepAwake ? lockScreen() : unlockScreen()),
   };
 
   // Wait for fonts so the restored position is exact.
   if (document.fonts?.ready) await document.fonts.ready;
+  if (jumpNoteId) {
+    // Going to a note from the Notes tab shows it even if its tag is switched off.
+    const target = await db.getNote(jumpNoteId);
+    if (target && notes.isHiddenByTags(target, series.id)) notes.keepVisible(target);
+  }
   await refreshNotes();
   if (jumpNoteId) jumpTo(jumpNoteId);
   else if (findJump) jumpToMatch(findJump.para, findJump.nth, findJump.term, findJump.whole);
@@ -1076,7 +1098,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   const teardownSelection = notes.setupSelectionBar(textEl, paras, async (action, sel) => {
     const draft = { seriesId: series.id, chapterId: id, ...sel };
     if (action === 'note') {
-      notes.openNoteEditor({ note: draft, where, onSaved: refreshNotes });
+      notes.openNoteEditor({ note: draft, where, onSaved: afterNoteSaved });
     } else if (action === 'highlight') {
       await notes.saveHighlight(draft);
       refreshNotes();
@@ -1099,8 +1121,9 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       dictionary.openDefine({
         text: sel.quote,
         onNote: async text => {
-          const tagIds = text ? [(await notes.vocabularyTag()).id] : [];
-          notes.openNoteEditor({ note: { ...draft, text, tagIds }, where, onSaved: refreshNotes });
+          const vocab = text ? await notes.vocabularyTag(series.id) : null;
+          const tagIds = vocab ? [vocab.id] : [];
+          notes.openNoteEditor({ note: { ...draft, text, tagIds }, where, onSaved: afterNoteSaved });
         },
         onFind: w => find.openFind({ term: w || dictionary.cleanWord(sel.quote), chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch }),
         onCodex: () => codex.openEntryEditor({
@@ -1921,6 +1944,9 @@ document.addEventListener('click', e => {
     case 'dict-clear':
       db.clearDefinitions().then(() => { toast('Saved words cleared'); route(); });
       break;
+    case 'notes-visibility':
+      activeReader?.openVisibility();
+      break;
     case 'reader-codex':
       activeReader?.openCodex();
       break;
@@ -1970,5 +1996,6 @@ sounds.onChange(() => document.querySelectorAll('.snd-btn')
 // Update 4: tags still using an old color move to the new 12, then the app starts.
 notes.migrateTagColors()
   .then(() => notes.migrateTagScopes()) // Update 5: series tags and shared tags
+  .then(() => notes.migrateNoShared()) // Update 10: every tag belongs to one series
   .catch(err => console.warn('Tags not updated', err))
   .finally(route);

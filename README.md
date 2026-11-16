@@ -202,6 +202,26 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 10 — Series tags, notes on/off, chapter ranges
+
+- **No more shared tags.** Every series has its own tags. Old shared tags are sorted out
+  automatically on first start: a shared tag used in several series becomes a copy in each of
+  them (notes keep their tag); one nobody used is removed.
+- **Series page → Tags tab**: see every tag with its note count, add a new one, rename it,
+  change its colour (colours already used in this series are faded), or delete it (two taps;
+  the notes stay, just without that tag).
+- **Reader → Notes button** (next to the headphones): switch each tag's notes on or off in the
+  text, or use All on / All off. "Highlights & untagged" has its own switch. A dot on the button
+  means something is hidden. Remembered per series.
+  A note you add under a hidden tag stays visible until you switch that tag once.
+  Opening a hidden note from the Notes list also shows it.
+- **Series Notes tab → chapter range**: the first chip picks All chapters, Up to where I am,
+  From chapter X to Y, or Only one chapter.
+- **All-series Notes page**: tag chips are grouped by name, so "Vocabulary" shows the Vocabulary
+  notes of every series.
+- **Define → Note** uses this series' tag called "Vocabulary" if it has one; otherwise the note
+  opens with no tag.
+
 ## Project structure
 
 ```
@@ -255,7 +275,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v16` → `reader-v17`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v17` → `reader-v18`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.
