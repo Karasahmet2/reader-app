@@ -22,6 +22,7 @@ import * as find from './find.js';
 import * as sounds from './sounds.js';
 import * as dictionary from './dictionary.js';
 import * as codex from './codex.js';
+import * as trash from './trash.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -227,6 +228,7 @@ async function route() {
     else if (view === 'sounds') await sounds.renderSoundsPage(app, nav('sounds'));
     else if (view === 'settings') await renderSettings();
     else if (view === 'backup') await renderBackup();
+    else if (view === 'trash') await trash.renderTrashPage(app, { days: settings.trashDays ?? 30, onDays: d => { settings = { ...settings, trashDays: d }; saveSettings(settings); } });
     else await renderLibrary();
     window.scrollTo(0, view === 'read' ? window.scrollY : (restoreY ?? (keepScroll ? y : 0)));
   } catch (err) {
@@ -1670,6 +1672,11 @@ async function renderSettings() {
       <span class="txt"><b>Backup &amp; restore</b>${status}</span>
       ${I.chevron}
     </a>
+    <a class="backup-link trash-link" href="#/trash">
+      <span class="ico">${I.trash}</span>
+      <span class="txt"><b>Trash</b><span>Deleted notes, tags and Codex items</span></span>
+      ${I.chevron}
+    </a>
 
     <section class="set-group" aria-label="Appearance">
       <p class="label">Appearance</p>
@@ -2028,5 +2035,6 @@ sounds.onChange(() => document.querySelectorAll('.snd-btn')
 notes.migrateTagColors()
   .then(() => notes.migrateTagScopes()) // Update 5: series tags and shared tags
   .then(() => notes.migrateNoShared()) // Update 10: every tag belongs to one series
+  .then(() => trash.purge(settings.trashDays ?? 30).catch(() => {}))
   .catch(err => console.warn('Tags not updated', err))
   .finally(route);

@@ -7,8 +7,9 @@
 
 import * as db from './db.js';
 import { TAG_PALETTE, OLD_TAG_COLORS } from './settings.js';
-import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, replaceHash } from './ui.js';
+import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, replaceHash, enterPageMode, exitPageMode, inPageMode, onLongPress } from './ui.js';
 import { openFind } from './find.js';
+import { trashNotes, trashTag } from './trash.js';
 import { isSingleWord } from './dictionary.js';
 
 const CODEX_SM = svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/><circle cx="12" cy="8.5" r="2"/>', 18);
@@ -562,14 +563,8 @@ export async function openNoteCard(noteId, ctx) {
           toast('Couldn’t copy here');
         }
       } else if (act === 'delete') {
-        if (!b.classList.contains('confirm')) {
-          b.classList.add('confirm');
-          b.innerHTML = `${I.trashSm} Tap again to delete`;
-          return;
-        }
-        await db.deleteNote(note.id);
-        toast('Note deleted');
         closeOverlay();
+        await trashNotes([note], { onUndone: ctx.onChanged });
         ctx.onChanged?.();
       }
     });
@@ -651,6 +646,7 @@ export const notesState = {
  * openSeriesId: from #/notes/ID — start on that series.
  */
 export async function renderNotes(app, navHtml, coverHtml = () => '', openSeriesId = null, fixed = null) {
+  if (nsel && !inPageMode()) nsel = null; // left the page while selecting
   // fixed = { seriesId, root }: draw just this series' notes inside the series page.
   const st = fixed ? seriesTabState(fixed.seriesId) : notesState;
   const [everyNote, tags, chapters, series] = await Promise.all([
@@ -725,12 +721,22 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
       <button type="button" data-ntag="all" aria-pressed="${st.filter === 'all'}">All${scoped.length ? ` <span class="count">${scoped.length}</span>` : ''}</button>
       ${chipTags.map(chipHtml).join('')}
     </nav>
+    <div class="pick-bar notes-selbar" hidden>
+      <button type="button" class="icon-btn" data-nsel="exit" aria-label="Stop selecting">${svg('<path d="M6 6l12 12M18 6L6 18"/>', 20, 2)}</button>
+      <span class="txt"><b id="nsel-count">Select notes</b></span>
+      <button type="button" class="chip" data-nsel="all">Select all</button>
+    </div>
     <div class="list-meta">
       <span id="notes-count"></span>
+      <button type="button" class="sort-btn nsel-start" data-nsel="start">${svg('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12l2.5 2.5 4.5-5"/>', 16, 2)} Select</button>
       ${fixed ? `<button type="button" class="sort-btn" data-nt="tags">${I.tag} Tags</button>`
         : one ? '<span>Reading order</span>' : `<button type="button" class="sort-btn" data-nt="sort">${I.sort}${NOTE_SORTS[st.sort]}</button>`}
     </div>
     <div id="notes-list" class="notes-groups"></div>
+    <div class="sel-actions is-floating notes-selacts" hidden>
+      <button type="button" class="btn" data-nsel="tag">${I.tag} Tag</button>
+      <button type="button" class="btn sel-del" data-nsel="delete">${I.trashSm} Delete</button>
+    </div>
 `;
   if (fixed) {
     fixed.root.innerHTML = `<div class="series-notes">${chipsHtml}</div>`;
@@ -760,6 +766,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
   const seriesName = id => seriesById.get(id)?.name || 'Unknown series';
   const chapterNum = n => chapterById.get(n.chapterId)?.number ?? Infinity;
 
+  let lastShown = [];
   const draw = () => {
     const q = st.query.trim().toLowerCase();
     const filterIds = filterIdsNow();
@@ -779,6 +786,9 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
       g.latest = Math.max(g.latest, n.updatedAt || 0);
       groups.set(n.seriesId, g);
     }
+    lastShown = shown;
+    if (nsel) for (const id of [...nsel.ids]) if (!allNotes.some(n => n.id === id)) nsel.ids.delete(id);
+    drawSelect();
     host.querySelector('#notes-count').textContent = one
       ? `${plural(shown.length, 'note')}${fixed && range.mode !== 'all' ? ` · ${rangeLabel()}` : ''}`
       : `${groups.size} series · ${plural(shown.length, 'note')}`;
@@ -816,7 +826,46 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
       </section>`;
     }).join('');
   };
+  /* select mode (long-press a note, or "Select") */
+  function drawSelect() {
+    const on = !!nsel;
+    const n = nsel?.ids.size || 0;
+    host.querySelector('.notes-selbar').hidden = !on;
+    host.querySelector('.notes-selacts').hidden = !on;
+    host.querySelector('.nsel-start').hidden = on || !lastShown.length;
+    (fixed ? host.querySelector('.series-notes') : host.querySelector('main')).classList.toggle('is-selecting', on);
+    if (!on) return;
+    host.querySelector('#nsel-count').textContent = n ? `${n} selected` : 'Select notes';
+    const allOn = lastShown.length && lastShown.every(x => nsel.ids.has(x.id));
+    host.querySelector('[data-nsel="all"]').textContent = allOn ? 'Select none' : `Select all ${lastShown.length}`;
+    const del = host.querySelector('[data-nsel="delete"]');
+    del.disabled = !n;
+    del.innerHTML = `${I.trashSm} Delete${n ? ` ${n}` : ''}`;
+    const picked = allNotes.filter(x => nsel.ids.has(x.id));
+    host.querySelector('[data-nsel="tag"]').disabled = !n || new Set(picked.map(x => x.seriesId)).size > 1;
+  }
+  const markCards = () => {
+    host.querySelectorAll('#notes-list [data-note-id]').forEach(el => {
+      const on = !!nsel?.ids.has(Number(el.dataset.noteId));
+      el.classList.toggle('is-picked', on);
+      el.setAttribute('aria-pressed', nsel ? String(on) : 'false');
+      el.querySelector('.sel-box')?.remove();
+      if (nsel) el.insertAdjacentHTML('beforeend', `<span class="sel-box${on ? ' is-on' : ''}" aria-hidden="true">${on ? svg('<path d="M5 12l5 5 9-10"/>', 13, 3) : ''}</span>`);
+    });
+  };
+  const startSelect = id => {
+    if (!nsel) {
+      nsel = { ids: new Set() };
+      enterPageMode(() => { nsel = null; nselRedraw?.(); });
+    }
+    if (id != null) nsel.ids.add(id);
+    drawSelect();
+    markCards();
+  };
+  nselRedraw = () => { drawSelect(); markCards(); };
   draw();
+  markCards();
+  onLongPress(host.querySelector('#notes-list'), '[data-note-id]', el => startSelect(Number(el.dataset.noteId)));
 
   const rerender = () => renderNotes(app, navHtml, coverHtml, null, fixed);
   const pickSeries = () => {
@@ -853,7 +902,39 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
     if (!st.query) search.focus();
   }
 
-  host.querySelector(fixed ? '.series-notes' : 'main').addEventListener('click', e => {
+  host.querySelector(fixed ? '.series-notes' : 'main').addEventListener('click', async e => {
+    const ns = e.target.closest('[data-nsel]');
+    if (ns) {
+      const a = ns.dataset.nsel;
+      if (a === 'start') startSelect(null);
+      if (a === 'exit') exitPageMode();
+      if (a === 'all') {
+        const allOn = lastShown.every(x => nsel.ids.has(x.id));
+        nsel.ids = allOn ? new Set() : new Set(lastShown.map(x => x.id));
+        drawSelect(); markCards();
+      }
+      if (a === 'delete' && nsel?.ids.size) {
+        const picked = allNotes.filter(x => nsel.ids.has(x.id));
+        await trashNotes(picked, { onUndone: rerender });
+        nsel = null;
+        exitPageMode();
+        rerender();
+      }
+      if (a === 'tag' && nsel?.ids.size) {
+        const picked = allNotes.filter(x => nsel.ids.has(x.id));
+        openBulkTags(picked, () => rerender());
+      }
+      return;
+    }
+    if (nsel) {
+      const c = e.target.closest('[data-note-id]');
+      if (c) {
+        const id = Number(c.dataset.noteId);
+        if (nsel.ids.has(id)) nsel.ids.delete(id); else nsel.ids.add(id);
+        drawSelect(); markCards();
+      }
+      return;
+    }
     const chip = e.target.closest('[data-ntag]');
     if (chip) {
       const v = chip.dataset.ntag;
@@ -892,6 +973,47 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
         });
       }
     }
+  });
+}
+
+let nsel = null; // notes list select mode: { ids: Set }
+let nselRedraw = null;
+
+/** Add or remove a tag on several notes (all from one series). */
+async function openBulkTags(notes, onDone) {
+  const sid = notes[0].seriesId;
+  const tags = tagsFor(await db.getAllTags(), sid).own;
+  const state = t => {
+    const n = notes.filter(x => x.tagIds?.includes(t.id)).length;
+    return n === notes.length ? 'all' : n ? 'some' : 'none';
+  };
+  const html = () => `<h2>Tag ${plural(notes.length, 'note')}</h2>
+    ${tags.length ? `<div class="pick-list">${tags.map(t => {
+      const st = state(t);
+      return `<button type="button" class="pick-row bulk-tag" data-bt="${t.id}" aria-pressed="${st === 'all'}">
+        <i class="vis-dot" style="background:${tagColor(t.color)}"></i><span class="txt"><b>${esc(t.name)}</b>
+        <small>${st === 'all' ? 'On all of them — tap to take it off' : st === 'some' ? `On ${notes.filter(x => x.tagIds?.includes(t.id)).length} of them — tap to add to all` : 'Tap to add to all'}</small></span>
+        ${st === 'all' ? I.check : st === 'some' ? '<span class="bulk-some" aria-hidden="true">–</span>' : ''}</button>`;
+    }).join('')}</div>` : '<p class="hint">This series has no tags yet. Add them on the series page → Tags.</p>'}
+    <button type="button" class="btn btn-accent" data-bt-done>Done</button>`;
+  openSheet('<div class="bulk-box"></div>', sheet => {
+    const box = sheet.querySelector('.bulk-box');
+    box.innerHTML = html();
+    box.addEventListener('click', async e => {
+      if (e.target.closest('[data-bt-done]')) { closeOverlay(); onDone?.(); return; }
+      const b = e.target.closest('[data-bt]');
+      if (!b) return;
+      const t = tags.find(x => x.id === Number(b.dataset.bt));
+      const remove = state(t) === 'all';
+      for (const n of notes) {
+        const ids = new Set(n.tagIds || []);
+        if (remove) ids.delete(t.id); else ids.add(t.id);
+        n.tagIds = [...ids];
+        await db.putNote(n);
+      }
+      toast(remove ? `“${t.name}” taken off` : `“${t.name}” added`);
+      box.innerHTML = html();
+    });
   });
 }
 
@@ -1036,8 +1158,8 @@ export async function openTagManager(onChanged, focusSeriesId = null) {
       const del = e.target.closest('[data-del]');
       if (del) {
         const id = Number(del.dataset.del);
-        if (confirmId !== id) { confirmId = id; redraw(); return; }
-        await db.deleteTag(id);
+        const t = (await db.getAllTags()).find(x => x.id === id);
+        if (t) await trashTag(t, { onUndone: changed });
         menuId = null;
         confirmId = null;
         await changed();
@@ -1142,10 +1264,8 @@ async function openTagEditor(seriesId, tag, counts, onDone) {
       if (!b) return;
       if (b.dataset.te === 'cancel') { closeOverlay(); return; }
       if (b.dataset.te === 'delete') {
-        if (!confirmDelete) { confirmDelete = true; draw(); return; }
-        await db.deleteTag(tag.id);
-        toast('Tag deleted');
         closeOverlay();
+        await trashTag(tag, { onUndone: onDone });
         onDone?.();
         return;
       }

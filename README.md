@@ -202,6 +202,20 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 12 — Codex sorting, getting back, select & delete, Trash
+
+- **Codex tab**: search (also matches other names), room chips with counts (tap several to combine),
+  and Sort: A–Z, Recently added, Order of appearance, Recently changed. Remembered per series.
+- **Return bar on Codex entries**: "↩ Ch. 41" jumps straight back to where you were reading (or
+  "↩ Series"), however many entries deep; the names on the way take you back to that entry.
+- **Delete quickly**: every row on an entry page has the ▾ drawer with Edit and Delete. Long-press
+  any value or connection to select several ("Select all" per field) and delete them together.
+  Notes lists: long-press a note or tap "Select"; then Delete or Tag (add/remove a tag on all).
+- **Trash** (Settings → Trash): deleted notes, tags, Codex entries, values and connections go
+  here. Every delete shows "… moved to Trash · Undo". Restore puts things back exactly (a tag goes
+  back on its notes, an entry gets its connections back). Emptied after 30 days (7 / 90 / Never).
+- No more "tap again to delete".
+
 ## Update 11 — Navigation fixes and Codex editing
 
 **Getting back where you were**
@@ -302,7 +316,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v18` → `reader-v19`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v19` → `reader-v20`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

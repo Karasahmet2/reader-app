@@ -23,7 +23,7 @@
 import { nameKey } from './parser.js';
 
 const DB_NAME = 'reader-app';
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 let dbPromise = null;
 
 function req(r) {
@@ -74,6 +74,9 @@ export function openDB() {
       }
       if (event.oldVersion < 7) {
         db.createObjectStore('wordnet', { keyPath: 'k' });
+      }
+      if (event.oldVersion < 8) {
+        db.createObjectStore('trash', { keyPath: 'id', autoIncrement: true });
       }
     };
     open.onsuccess = () => resolve(open.result);
@@ -363,20 +366,27 @@ export const putCodexEntry = entry => withTx(['codex'], 'readwrite', async s => 
   rec.id = await req(s.codex.put(rec));
   return rec;
 });
-/** Delete an entry and remove links to it from the other entries. */
+/** Delete an entry and remove links to it from the other entries.
+ *  Returns the links it removed ({ entryId, fid, link }) so they can be put back. */
 export const deleteCodexEntry = id => withTx(['codex'], 'readwrite', async s => {
   const entry = await req(s.codex.get(id));
-  if (!entry) return;
+  if (!entry) return [];
+  const removed = [];
   for (const e of await req(s.codex.index('seriesId').getAll(entry.seriesId))) {
     let changed = false;
     for (const [k, v] of Object.entries(e.fields || {})) {
       if (!Array.isArray(v)) continue;
-      const kept = v.filter(x => (typeof x === 'object' ? x.id : x) !== id);
+      const kept = v.filter(x => {
+        const hit = (typeof x === 'object' ? x.id : x) === id;
+        if (hit && e.id !== id) removed.push({ entryId: e.id, fid: k, link: x });
+        return !hit;
+      });
       if (kept.length !== v.length) { e.fields[k] = kept; changed = true; }
     }
-    if (changed) await req(s.codex.put(e));
+    if (changed && e.id !== id) await req(s.codex.put(e));
   }
   await req(s.codex.delete(id));
+  return removed;
 });
 
 // ---------- Dictionary (saved lookups) ----------
@@ -407,6 +417,16 @@ export const putNote = note => withTx(['notes'], 'readwrite', s => {
   return req(s.notes.put(copy));
 });
 export const deleteNote = id => withTx(['notes'], 'readwrite', s => req(s.notes.delete(id)));
+export const deleteNotes = ids => withTx(['notes'], 'readwrite', async s => { for (const id of ids) await req(s.notes.delete(id)); });
+/** Put a tag back exactly as it was (same id). */
+export const putTag = tag => withTx(['tags'], 'readwrite', s => req(s.tags.put(tag)));
+
+// ---------- Trash (deleted notes, tags, Codex entries and values; restorable) ----------
+export const addTrash = item => withTx(['trash'], 'readwrite', s => req(s.trash.add({ at: Date.now(), ...item })));
+export const getTrash = id => withTx(['trash'], 'readonly', s => req(s.trash.get(id)));
+export const getAllTrash = () => withTx(['trash'], 'readonly', s => req(s.trash.getAll()));
+export const deleteTrash = id => withTx(['trash'], 'readwrite', s => req(s.trash.delete(id)));
+export const clearTrash = () => withTx(['trash'], 'readwrite', s => req(s.trash.clear()));
 
 // ---------- Whole library (backup & restore) ----------
 const ALL_STORES = ['series', 'chapters', 'texts', 'progress', 'covers', 'tags', 'notes', 'codex'];

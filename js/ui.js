@@ -73,9 +73,22 @@ let toastTimer;
 export function toast(message) {
   const el = document.getElementById('toast');
   el.textContent = message;
+  el.classList.remove('has-action');
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+/** A toast with a button (e.g. "Undo"), shown for `ms`. */
+export function toastAction(message, label, onAction, ms = 8000) {
+  const el = document.getElementById('toast');
+  el.innerHTML = `<span>${esc(message)}</span><button type="button">${esc(label)}</button>`;
+  el.classList.add('show', 'has-action');
+  el.querySelector('button').addEventListener('click', () => {
+    el.classList.remove('show');
+    onAction();
+  }, { once: true });
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
 /* ---------- page history ----------
@@ -97,6 +110,7 @@ history.scrollRestoration = 'manual';
 /** Router calls this first on every route. Returns the scroll position to restore when
  *  coming back to a page you were on (back / forward), otherwise null. */
 export function trackRoute() {
+  pageMode = null;
   const t = readTrail();
   if (depth >= 0 && t[depth]) t[depth].y = window.scrollY; // remember where you were on the page you left
   const st = history.state;
@@ -123,6 +137,9 @@ export function replaceHash(h) {
   replacing = true;
   location.replace(h);
 }
+/** Where this page sits in this visit's history: { depth, trail: [{ h, y }] }. */
+export function trailInfo() { return { depth, trail: readTrail() }; }
+
 /** The page before this one in this visit, if any. */
 export function previousHash() {
   return depth > 0 ? readTrail()[depth - 1]?.h || null : null;
@@ -136,6 +153,45 @@ export function goBack(fallback) {
 export function goUp(h) {
   if (previousHash() === (h || '#/')) history.back();
   else location.hash = h;
+}
+
+/* ---------- page modes (e.g. selecting notes) ----------
+   A mode adds a history entry on the same page, so the phone's back gesture leaves the mode
+   instead of the page. */
+let pageMode = null;
+export function enterPageMode(onExit) {
+  if (pageMode) return;
+  pageMode = { onExit };
+  history.pushState({ ...(history.state || {}), mode: true }, '');
+}
+export function exitPageMode() { if (pageMode) history.back(); }
+export const inPageMode = () => !!pageMode;
+window.addEventListener('popstate', () => {
+  if (pageMode && !history.state?.mode) {
+    const m = pageMode;
+    pageMode = null;
+    m.onExit();
+  }
+});
+
+/** Long-press on elements matching `selector` inside `root` (≈0.5 s). The click that follows is swallowed. */
+export function onLongPress(root, selector, fn) {
+  let timer = null, start = null, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  root.addEventListener('pointerdown', e => {
+    const el = e.target.closest(selector);
+    if (!el || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    fired = false;
+    start = { x: e.clientX, y: e.clientY };
+    cancel();
+    timer = setTimeout(() => { fired = true; timer = null; navigator.vibrate?.(15); fn(el, e); }, 480);
+  });
+  root.addEventListener('pointermove', e => {
+    if (timer && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => root.addEventListener(t, cancel));
+  root.addEventListener('click', e => { if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; } }, true);
+  root.addEventListener('contextmenu', e => { if (e.target.closest(selector)) e.preventDefault(); });
 }
 
 /* ---------- overlays (bottom sheets, full-screen panels) ----------

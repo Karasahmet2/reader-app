@@ -16,9 +16,10 @@
 //     fields[linkField] = [{ id, label?, since }]              (older entries: ids or { id, label })
 
 import * as db from './db.js';
-import { esc, I, svg, plural, fmtNum, toast, openSheet, closeOverlay, goBack, pushOverlayStep, popOverlayStep } from './ui.js';
+import { esc, I, svg, plural, fmtNum, toast, openSheet, closeOverlay, goBack, pushOverlayStep, popOverlayStep, trailInfo, enterPageMode, exitPageMode, inPageMode, onLongPress } from './ui.js';
 import { tagColor, TAG_COLORS } from './notes.js';
 import { openFind } from './find.js';
+import { trashEntry, trashValues, recordValues } from './trash.js';
 import { downloadBlob } from './backup.js';
 import { CODEX_PROMPT } from './codex-guide.js';
 
@@ -540,6 +541,54 @@ export function openNoCodex(seriesId, onDone) {
 
 /* ------------------------------------------------------------------ series page: Codex tab */
 
+/* Codex tab: rooms picked and sort, remembered per series; search per visit. */
+const CX_SORTS = {
+  az: { short: 'A–Z', name: 'A–Z', hint: 'By name' },
+  added: { short: 'Added', name: 'Recently added', hint: 'The ones you added last come first' },
+  appear: { short: 'Appearance', name: 'Order of appearance', hint: 'By “Known from” chapter, earliest first' },
+  changed: { short: 'Changed', name: 'Recently changed', hint: 'Entries you edited last come first' },
+};
+const VIEW_STORE = 'reader-codex-view';
+const codexQuery = new Map();
+function codexView(seriesId) {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(VIEW_STORE))?.[seriesId]; } catch { /* none */ }
+  return { rooms: Array.isArray(v?.rooms) ? v.rooms : [], sort: CX_SORTS[v?.sort] ? v.sort : 'az' };
+}
+function saveCodexView(seriesId, v) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(VIEW_STORE)) || {}; } catch { /* fresh */ }
+  all[seriesId] = { rooms: v.rooms, sort: v.sort };
+  try { localStorage.setItem(VIEW_STORE, JSON.stringify(all)); } catch { /* private mode */ }
+}
+function sortEntries(list, sort) {
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const cmp = {
+    az: byName,
+    added: (a, b) => (b.createdAt || b.id) - (a.createdAt || a.id),
+    appear: (a, b) => (a.since || 0) - (b.since || 0) || byName(a, b),
+    changed: (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
+  }[sort] || byName;
+  return [...list].sort(cmp);
+}
+function openCodexSort(seriesId, onChanged) {
+  const v = codexView(seriesId);
+  openSheet(`<h2>Sort entries</h2>
+    <div class="option-list" role="radiogroup" aria-label="Sort entries">
+      ${Object.entries(CX_SORTS).map(([k, o]) => `<label class="option-row${v.sort === k ? ' is-on' : ''}">
+        <span class="txt">${o.name}<small>${o.hint}</small></span>
+        <input type="radio" name="cxsort" value="${k}" ${v.sort === k ? 'checked' : ''}></label>`).join('')}
+    </div>
+    <p class="hint">Remembered for this series, together with the rooms you picked.</p>`, sheet => {
+    sheet.addEventListener('change', e => {
+      v.sort = e.target.value;
+      saveCodexView(seriesId, v);
+      closeOverlay();
+      onChanged();
+    });
+  });
+}
+
 export async function renderCodexTab(root, seriesId) {
   const entries = await db.getCodexOfSeries(seriesId);
   const schema = await schemaOf(seriesId, entries);
@@ -559,28 +608,72 @@ export async function renderCodexTab(root, seriesId) {
     const asOf = await codexAsOf(seriesId, schema);
     const shown = knownAt(entries, schema, asOf);
     const hidden = entries.length - shown.length;
-    const rooms = [...schema.types];
+    const view = codexView(seriesId);
+    view.rooms = view.rooms.filter(r => schema.map.has(r) || r === '_other');
     const others = shown.filter(e => !schema.map.has(e.type));
-    const section = (t, list) => `
-      <section class="cx-sec" style="--cx:${tagColor(t.color)}">
-        <div class="cx-sec-head">${svg(iconOf(t), 16, 2)}<b>${esc(t.plural)}</b>
-          ${list.length ? `<span class="cx-count">${list.length}</span>` : ''}
-          ${t.id !== '_other' ? `<button type="button" class="chip" data-cx-add="${esc(t.id)}">${I.plusSm} Add</button>` : ''}</div>
-        ${list.length ? `<div class="cx-list">${sortByName(list).map(e => `
-          <a class="cx-row" href="#/codex/${e.id}">${avatarIn(schema, e)}
-            <span class="txt"><b>${esc(e.name)}</b><small>${esc(summary(schema, e, entries, asOf))}</small></span>${chTag(e.since)}</a>`).join('')}</div>`
-        : `<div class="cx-empty-room">${esc(t.hint || `No ${t.plural.toLowerCase()} yet`)}</div>`}
-      </section>`;
+    const rooms = [...schema.types, ...(others.length ? [OTHER] : [])];
+    const countIn = id => shown.filter(e => (id === '_other' ? !schema.map.has(e.type) : e.type === id)).length;
     root.innerHTML = `<div class="codex-tab">
+      <label class="search-box cx-search">${I.search}<span class="visually-hidden">Search the Codex</span>
+        <input type="search" id="cx-q" placeholder="Search names and other names" value="${esc(codexQuery.get(seriesId) || '')}" autocomplete="off"></label>
+      <nav class="filter-chips cx-chips" aria-label="Rooms">
+        <button type="button" class="range-chip sort-chip" data-cx="sort">${svg('<path d="M7 4v16M3 16l4 4 4-4M14 5h7M14 10h5M14 15h3"/>', 16, 2)}${CX_SORTS[view.sort].short}${svg('<path d="M6 9l6 6 6-6"/>', 14, 2)}</button>
+        <span class="chip-sep" aria-hidden="true"></span>
+        <button type="button" data-room="all" aria-pressed="${!view.rooms.length}">All <span class="count">${shown.length}</span></button>
+        ${rooms.map(t => `<button type="button" data-room="${esc(t.id)}" aria-pressed="${view.rooms.includes(t.id)}" style="--cx:${tagColor(t.color)}">
+          ${svg(iconOf(t), 14, 2.2)}${esc(t.plural)} <span class="count">${countIn(t.id)}</span></button>`).join('')}
+      </nav>
       <div class="list-meta">
-        <span>${plural(shown.length, 'entry', 'entries')}${schema.hideLater ? ` · as of Ch. ${fmtNum(asOf)}` : ''}${schema.hideLater && asOf !== progress
-          ? ` · <button type="button" class="link-btn" data-cx="progress">My progress</button>` : ''}</span>
+        <span id="cx-count"></span>
         <button type="button" class="icon-btn" data-cx="menu" aria-label="Codex options">${I.dots}</button>
       </div>
-      ${rooms.map(t => section(t, shown.filter(e => e.type === t.id))).join('')}
-      ${others.length ? section(OTHER, others) : ''}
+      <div class="cx-results"></div>
       ${hidden ? `<div class="cx-hidden">${LOCK}<span>${plural(hidden, 'entry', 'entries')} you learn about later ${hidden === 1 ? 'is' : 'are'} hidden.</span></div>` : ''}
     </div>`;
+
+    const results = root.querySelector('.cx-results');
+    const rowHtml = e => `<a class="cx-row" href="#/codex/${e.id}">${avatarIn(schema, e)}
+      <span class="txt"><b>${esc(e.name)}</b><small>${esc(summary(schema, e, entries, asOf))}</small></span>${chTag(e.since)}</a>`;
+    const drawList = () => {
+      const q = (codexQuery.get(seriesId) || '').trim().toLowerCase();
+      const inRoom = e => !view.rooms.length || view.rooms.includes(schema.map.has(e.type) ? e.type : '_other');
+      const match = e => !q || [e.name, ...(e.aliases || [])].some(n => n.toLowerCase().includes(q));
+      const list = sortEntries(shown.filter(e => inRoom(e) && match(e)), view.sort);
+      const what = view.rooms.length === 1 ? (rooms.find(t => t.id === view.rooms[0])?.plural || 'entries').toLowerCase() : 'entries';
+      root.querySelector('#cx-count').innerHTML = `${list.length} ${list.length === 1 && view.rooms.length === 1 ? (rooms.find(t => t.id === view.rooms[0])?.name || 'entry').toLowerCase() : what}${schema.hideLater ? ` · as of Ch. ${fmtNum(asOf)}` : ''}${schema.hideLater && asOf !== progress
+        ? ` · <button type="button" class="link-btn" data-cx="progress">My progress</button>` : ''}`;
+      if (!view.rooms.length && !q) {
+        // Everything, grouped by room (each room sorted the chosen way), with Add buttons.
+        results.innerHTML = rooms.map(t => {
+          const inT = list.filter(e => (t.id === '_other' ? !schema.map.has(e.type) : e.type === t.id));
+          if (t.id === '_other' && !inT.length) return '';
+          return `<section class="cx-sec" style="--cx:${tagColor(t.color)}">
+            <div class="cx-sec-head">${svg(iconOf(t), 16, 2)}<b>${esc(t.plural)}</b>
+              ${inT.length ? `<span class="cx-count">${inT.length}</span>` : ''}
+              ${t.id !== '_other' ? `<button type="button" class="chip" data-cx-add="${esc(t.id)}">${I.plusSm} Add</button>` : ''}</div>
+            ${inT.length ? `<div class="cx-list">${inT.map(rowHtml).join('')}</div>`
+              : `<div class="cx-empty-room">${esc(t.hint || `No ${t.plural.toLowerCase()} yet`)}</div>`}
+          </section>`;
+        }).join('');
+        return;
+      }
+      const addable = view.rooms.filter(r => r !== '_other').map(r => schema.map.get(r)).filter(Boolean);
+      results.innerHTML = `${addable.length ? `<div class="cx-addrow">${addable.map(t => `<button type="button" class="chip" data-cx-add="${esc(t.id)}">${I.plusSm} Add ${esc(t.name.toLowerCase())}</button>`).join('')}</div>` : ''}
+        ${list.length ? `<div class="cx-list cx-flat">${list.map(rowHtml).join('')}</div>`
+          : `<div class="empty" style="padding:30px 16px"><span>${q ? `Nothing matches “${esc(codexQuery.get(seriesId))}”.` : 'Nothing here yet.'}</span></div>`}`;
+    };
+    drawList();
+    root.querySelector('#cx-q').addEventListener('input', e => { codexQuery.set(seriesId, e.target.value); drawList(); });
+    root.querySelector('.cx-chips').addEventListener('click', e => {
+      const r = e.target.closest('[data-room]');
+      if (!r) return;
+      const id = r.dataset.room;
+      if (id === 'all') view.rooms = [];
+      else view.rooms = view.rooms.includes(id) ? view.rooms.filter(x => x !== id) : [...view.rooms, id];
+      saveCodexView(seriesId, view);
+      root.querySelectorAll('[data-room]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.room === 'all' ? !view.rooms.length : view.rooms.includes(b.dataset.room))));
+      drawList();
+    });
   }
 
   root.querySelector('.codex-tab').addEventListener('click', async e => {
@@ -596,6 +689,7 @@ export async function renderCodexTab(root, seriesId) {
     if (b.dataset.cx === 'guide') openGuide();
     if (b.dataset.cx === 'menu') openCodexMenu(seriesId, schema, entries, redraw);
     if (b.dataset.cx === 'progress') { setViewAs(seriesId, null); redraw(); }
+    if (b.dataset.cx === 'sort') openCodexSort(seriesId, redraw);
   });
 }
 
@@ -654,30 +748,63 @@ const CHEV = svg('<path d="M6 9l6 6 6-6"/>', 18, 2);
 const PEN = svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>', 15, 1.9);
 
 /** One connection row: the name goes to that entry, the ▾ opens its details. */
-function linkRow(schema, target, x, key, { past = false, detail = '', editable = null } = {}) {
+function linkRow(schema, target, x, key, { past = false, detail = '', editable = null, item = null } = {}) {
   const open = openDrawers.has(key);
   const desc = x.label ? `<div class="cx-dw-desc"><small>Description</small><span>${esc(x.label)}</span></div>` : '';
   const when = x.until != null
     ? `${x.since ? `True from Ch. ${fmtNum(x.since)}` : 'From the start'} · last true in Ch. ${fmtNum(x.until)}`
     : `${x.since ? `True from Ch. ${fmtNum(x.since)}` : 'From the start'} · still true`;
-  return `<div class="cx-lrow${past ? ' is-past' : ''}${open ? ' is-open' : ''}">
+  return `<div class="cx-lrow${past ? ' is-past' : ''}${open ? ' is-open' : ''}"${item ? ` data-key="${item}"` : ''}>
     <div class="cx-lhead">
       <a class="cx-lname" href="#/codex/${target.id}">${avatarIn(schema, target, 30)}<span>${esc(target.name)}</span>
         ${past ? `<em>${spanText(x.since, x.until)}</em>` : ''}</a>
       <button type="button" class="cx-chev" data-drawer="${key}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} details">${CHEV}</button>
     </div>
     ${open ? `<div class="cx-drawer">${detail}${desc}
-      <div class="cx-dw-when">${CLOCK}<span>${when}</span>
-        ${editable ? `<button type="button" class="chip" data-cxa="edit-link" data-f="${esc(editable.fid)}" data-i="${editable.i}">${PEN} Edit</button>` : ''}</div>
+      <div class="cx-dw-when">${CLOCK}<span>${when}</span></div>
+      ${editable ? `<div class="cx-dw-btns">
+        <button type="button" class="btn" data-cxa="edit-link" data-f="${esc(editable.fid)}" data-i="${editable.i}">${PEN} Edit</button>
+        <button type="button" class="btn cx-dw-del" data-cxa="del" data-key="${item}">${I.trashSm} Delete</button></div>` : ''}
     </div>` : ''}
   </div>`;
+}
+
+let sel = null; // entry page select mode: { entryId, keys: Set }
+
+/** Return bar: "↩ Ch. 41 · Seo Jin › Ghost Adept › (this)" — where you came into the Codex from. */
+async function returnBarHtml(entry, map) {
+  const { depth, trail } = trailInfo();
+  const crumbs = [];
+  let i = depth - 1;
+  for (; i >= 0; i--) {
+    const m = /^#\/codex\/(\d+)$/.exec(trail[i]?.h || '');
+    if (!m) break;
+    crumbs.unshift({ id: Number(m[1]), steps: depth - i });
+  }
+  const origin = i >= 0 ? trail[i] : null;
+  let label = null;
+  const read = /^#\/read\/(\d+)/.exec(origin?.h || '');
+  if (read) {
+    const ch = await db.getChapter(Number(read[1]));
+    label = ch ? `Ch. ${fmtNum(ch.number)}` : 'Reading';
+  } else if (/^#\/series\//.test(origin?.h || '')) label = 'Series';
+  else if (/^#\/notes/.test(origin?.h || '')) label = 'Notes';
+  const named = crumbs.filter(c => map.has(c.id) && c.id !== entry.id);
+  if (!label && !named.length) return '';
+  if (!read && !named.length) return ''; // one step from the series page: the back arrow already does it
+  const shown = named.slice(-3);
+  return `<nav class="cx-return" aria-label="Where you came from">
+    ${label ? `<button type="button" class="cx-ret-origin" data-steps="${depth - i}">${svg('<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>', 15, 2.2)}${esc(label)}</button>` : ''}
+    <span class="cx-crumbs">${named.length > shown.length ? '<span class="sep">…</span>' : ''}${shown.map(c => `<button type="button" data-steps="${c.steps}">${esc(map.get(c.id).name)}</button><span class="sep" aria-hidden="true">›</span>`).join('')}<b aria-current="page">${esc(entry.name)}</b></span>
+  </nav>`;
 }
 
 export async function renderEntryPage(app, id) {
   const entry = await db.getCodexEntry(id);
   if (!entry) {
     app.innerHTML = `<main class="page"><div class="empty"><strong>This entry no longer exists</strong>
-      <a class="btn" href="#/">Back to library</a></div></main>`;
+      <span>It may be in the Trash (Settings → Trash).</span>
+      <a class="btn" href="#/" data-back>Back</a></div></main>`;
     return;
   }
   const [all, notesOf, chapters, progress] = await Promise.all([
@@ -689,33 +816,84 @@ export async function renderEntryPage(app, id) {
   const t = typeIn(schema, entry);
   const names = [entry.name, ...(entry.aliases || [])].filter(Boolean).map(n => n.toLowerCase());
   const seen = e => !schema?.hideLater || visible(e, asOf);
+  if (sel && (sel.entryId !== entry.id || !inPageMode())) sel = null;
+  const selecting = !!sel;
   let hiddenCount = 0;
 
+  // Every value / connection of this entry that can be selected or deleted, by key.
+  const items = new Map();
+  const fieldKeys = new Map(); // field id → keys shown
+  const check = key => `<span class="sel-box${sel?.keys.has(key) ? ' is-on' : ''}" aria-hidden="true">${sel?.keys.has(key) ? svg('<path d="M5 12l5 5 9-10"/>', 13, 3) : ''}</span>`;
+  const selRow = (key, inner, cls = '') => `<button type="button" class="cx-srow ${cls}" data-pick-key="${esc(key)}" aria-pressed="${!!sel?.keys.has(key)}">${check(key)}${inner}</button>`;
+  const head = (label, fid) => (selecting && (fieldKeys.get(fid)?.length || 0) > 0
+    ? `<div class="cx-fhead"><h3>${esc(label)}</h3><button type="button" class="link-btn" data-selall="${esc(fid)}">${fieldKeys.get(fid).every(k => sel.keys.has(k)) ? 'Clear' : 'Select all'}</button></div>`
+    : `<h3>${esc(label)}</h3>`);
+  const block = (label, fid, inner) => `<section class="cx-field">${head(label, fid)}<div class="cx-card">${inner}</div></section>`;
+
   const fieldsHtml = t.fields.map(f => {
+    const keys = [];
+    fieldKeys.set(f.id, keys);
     if (f.kind !== 'link') {
       const vals = textValues(entry, f.id);
       const known = vals.filter(x => x.since <= asOf);
       hiddenCount += vals.length - known.length;
       if (!known.length || (known.length === 1 && !known[0].v)) return '';
-      const cur = known[known.length - 1];
-      const older = known.slice(0, -1).reverse();
-      return card(f.label, `
-        ${cur.v ? `<div class="cx-vrow"><span class="${f.kind === 'longtext' ? 'cx-about' : ''}">${esc(cur.v)}</span>${chTag(cur.since)}</div>` : ''}
-        ${older.map((h, i) => {
-          const next = known[known.length - 2 - i + 1];
-          return `<div class="cx-vrow is-old"><span>${esc(h.v || '(empty)')}</span><em>${spanText(h.since, next ? next.since - 1 : null)}</em></div>`;
-        }).join('')}`);
+      const rows = [...known].reverse().map((h, i) => {
+        if (!h.v) return '';
+        const key = `t:${f.id}:${h.since}`;
+        keys.push(key);
+        items.set(key, itemFor(f, h, map));
+        const old = i > 0;
+        const next = old ? known[known.length - i] : null;
+        const tagHtml = old ? `<em>${spanText(h.since, next ? next.since - 1 : null)}</em>` : chTag(h.since);
+        if (selecting) return selRow(key, `<span class="txt${f.kind === 'longtext' ? ' cx-about' : ''}">${esc(h.v)}</span>${tagHtml}`, old ? 'is-old' : '');
+        const open = openDrawers.has(`${entry.id}:${key}`);
+        return `<div class="cx-vrow${old ? ' is-old' : ''}${open ? ' is-open' : ''}" data-key="${esc(key)}">
+          <div class="cx-vhead"><span class="${f.kind === 'longtext' ? 'cx-about' : ''}">${esc(h.v)}</span>${tagHtml}
+            <button type="button" class="cx-chev" data-drawer="${entry.id}:${esc(key)}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} details">${CHEV}</button></div>
+          ${open ? `<div class="cx-drawer"><div class="cx-dw-when">${CLOCK}<span>${old ? `True in ${spanText(h.since, next ? next.since - 1 : null)}` : `True from Ch. ${fmtNum(h.since || 1)}`}</span></div>
+            <div class="cx-dw-btns"><button type="button" class="btn" data-cxa="edit-val" data-f="${esc(f.id)}" data-since="${h.since}">${PEN} Edit</button>
+              <button type="button" class="btn cx-dw-del" data-cxa="del" data-key="${esc(key)}">${I.trashSm} Delete</button></div></div>` : ''}
+        </div>`;
+      }).join('');
+      return rows ? block(f.label, f.id, rows) : '';
     }
-    const items = linkValues(entry, f.id).map((x, i) => ({ ...x, i })).filter(x => map.has(x.id));
-    const ok = items.filter(x => seen(map.get(x.id)) || !schema?.hideLater);
+    const list = linkValues(entry, f.id).map((x, i) => ({ ...x, i })).filter(x => map.has(x.id));
+    const ok = list.filter(x => seen(map.get(x.id)) || !schema?.hideLater);
     const now = ok.filter(x => linkState(x, asOf) === 'now');
     const past = ok.filter(x => linkState(x, asOf) === 'past');
-    hiddenCount += items.length - now.length - past.length;
+    hiddenCount += list.length - now.length - past.length;
     if (!now.length && !past.length) return '';
-    const row = (x, isPast) => linkRow(schema, map.get(x.id), x, `${entry.id}:${f.id}:${x.id}`, { past: isPast, editable: { fid: f.id, i: x.i } });
-    return card(f.label, `${now.map(x => row(x, false)).join('')}
+    const row = (x, isPast) => {
+      const key = `l:${f.id}:${x.i}`;
+      keys.push(key);
+      items.set(key, itemFor(f, x, map));
+      const target = map.get(x.id);
+      if (selecting) {
+        return selRow(key, `${avatarIn(schema, target, 30)}<span class="txt"><b>${esc(target.name)}</b>
+          <small>${esc([x.label, isPast ? spanText(x.since, x.until) : `Ch. ${fmtNum(x.since || 1)} →`].filter(Boolean).join(' · '))}</small></span>`, isPast ? 'is-old' : '');
+      }
+      return linkRow(schema, target, x, `${entry.id}:${f.id}:${x.id}`, { past: isPast, editable: { fid: f.id, i: x.i }, item: key });
+    };
+    return block(f.label, f.id, `${now.map(x => row(x, false)).join('')}
       ${past.length ? `<div class="cx-past-h">Past</div>${past.map(x => row(x, true)).join('')}` : ''}`);
   }).join('');
+
+  // "Also called" and "About" can be selected too.
+  const aliasKeys = (entry.aliases || []).map(a => {
+    const key = `a:${a}`;
+    items.set(key, { fid: '_alias', label: 'Also called', kind: 'text', value: a, text: `“${a}”` });
+    return key;
+  });
+  fieldKeys.set('_alias', aliasKeys);
+  const aliasesHtml = entry.aliases?.length ? block('Also called', '_alias', entry.aliases.map((a, i) => (selecting
+    ? selRow(aliasKeys[i], `<span class="txt">${esc(a)}</span>`)
+    : `<div class="cx-vrow" data-key="${esc(aliasKeys[i])}"><div class="cx-vhead"><span>${esc(a)}</span></div></div>`)).join('')) : '';
+  if (entry.about) items.set('ab', { fid: '_about', label: 'About', kind: 'text', value: entry.about, text: `“${entry.about.slice(0, 40)}”` });
+  fieldKeys.set('_about', entry.about ? ['ab'] : []);
+  const aboutHtml = entry.about ? (selecting
+    ? `<section class="cx-field"><h3>About</h3>${selRow('ab', `<span class="txt cx-about">${esc(entry.about)}</span>`, 'is-card')}</section>`
+    : `<section class="cx-field"><h3>About</h3><div class="cx-card"><p class="cx-about cx-pad" data-key="ab">${esc(entry.about)}</p></div></section>`) : '';
 
   // Other entries that link here, as of the chosen chapter.
   const back = [];
@@ -730,41 +908,85 @@ export async function renderEntryPage(app, id) {
   const linkedNotes = notesOf.filter(n => n.seriesId === entry.seriesId
     && names.some(nm => `${n.quote} ${n.text}`.toLowerCase().includes(nm)));
   const known = visible(entry, asOf);
+  const ret = selecting ? '' : await returnBarHtml(entry, map);
+  const n = sel?.keys.size || 0;
 
-  app.innerHTML = `<main class="page cx-page" style="--cx:${colorIn(schema, entry)}">
+  app.innerHTML = `<main class="page cx-page${selecting ? ' is-selecting' : ''}" style="--cx:${colorIn(schema, entry)}">
     <div class="cx-wash" aria-hidden="true"></div>
-    <div class="row-head">
+    ${selecting ? `<div class="pick-bar">
+      <button type="button" class="icon-btn" data-sel="exit" aria-label="Stop selecting">${svg('<path d="M6 6l12 12M18 6L6 18"/>', 20, 2)}</button>
+      <span class="txt"><b>${n ? `${n} selected` : 'Select items'}</b><small>${esc(entry.name)}</small></span>
+    </div>` : `<div class="row-head">
       <a class="icon-btn" href="#/series/${entry.seriesId}/codex" data-back aria-label="Back">${I.back}</a>
       <button type="button" class="chip" data-cxa="edit">${I.pencilSm} Edit</button>
     </div>
+    ${ret}`}
     <div class="cx-hero">${avatarIn(schema, entry, 64)}
       <div class="txt"><h1>${esc(entry.name)}</h1>
         <small>${esc(t.name)}${entry.since ? ` · known from Ch. ${fmtNum(entry.since)}` : ''} · <span id="cx-seen"></span></small></div>
     </div>
-    ${schema?.hideLater ? `<div class="cx-viewas">
+    ${schema?.hideLater && !selecting ? `<div class="cx-viewas">
       <div class="cx-va-row">${svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', 18)}
         <span>Viewing as of</span>
         <button type="button" class="cx-chbtn" data-cxa="viewas">Ch. ${fmtNum(asOf)}${asOf === progress ? ' · your progress' : ''}${CHEV}</button></div>
       <div class="cx-va-sub"><span>Same for every entry you open</span>${asOf !== progress ? '<button type="button" class="link-btn" data-cxa="progress">Back to my progress</button>' : ''}</div>
     </div>` : ''}
     ${!known ? `<div class="cx-hidden">${LOCK}<span>You learn about ${esc(entry.name)} in Ch. ${fmtNum(entry.since)}.</span></div>` : ''}
-    ${entry.aliases?.length ? card('Also called', entry.aliases.map(a => `<div class="cx-vrow"><span>${esc(a)}</span></div>`).join('')) : ''}
+    ${aliasesHtml}
     ${fieldsHtml}
-    ${entry.about ? card('About', `<p class="cx-about cx-pad">${esc(entry.about)}</p>`) : ''}
-    ${back.length ? card('Linked from', back.map(b => linkRow(schema, b.other, b.x, `${entry.id}:from:${b.other.id}:${b.f.id}`,
+    ${aboutHtml}
+    ${!selecting && back.length ? card('Linked from', back.map(b => linkRow(schema, b.other, b.x, `${entry.id}:from:${b.other.id}:${b.f.id}`,
       { detail: `<div class="cx-dw-desc"><small>As</small><span>${esc(b.other.name)}’s ${esc(b.f.label.toLowerCase())}</span></div>` })).join('')) : ''}
     ${hiddenCount ? `<div class="cx-hidden">${LOCK}<span>${plural(hiddenCount, 'detail')} from later chapters ${hiddenCount === 1 ? 'is' : 'are'} hidden.</span></div>` : ''}
-    ${linkedNotes.length ? `<section class="cx-field"><h3>Notes that mention ${esc(entry.name)} · ${linkedNotes.length}</h3>
-      <div class="cx-notes">${linkedNotes.slice(0, 20).map(n => `
-        <a class="cx-note" href="${n.quote ? `#/read/${n.chapterId}/note/${n.id}` : `#/read/${n.chapterId}`}">
-          ${n.quote ? `<b>${esc(n.quote.slice(0, 120))}</b>` : '<b>Chapter note</b>'}
-          ${n.text ? `<span>${esc(n.text.slice(0, 160))}</span>` : ''}</a>`).join('')}</div></section>` : ''}
-    <button type="button" class="btn cx-find" data-cxa="find">${I.searchSm} Find every mention</button>
+    ${!selecting && linkedNotes.length ? `<section class="cx-field"><h3>Notes that mention ${esc(entry.name)} · ${linkedNotes.length}</h3>
+      <div class="cx-notes">${linkedNotes.slice(0, 20).map(nt => `
+        <a class="cx-note" href="${nt.quote ? `#/read/${nt.chapterId}/note/${nt.id}` : `#/read/${nt.chapterId}`}">
+          ${nt.quote ? `<b>${esc(nt.quote.slice(0, 120))}</b>` : '<b>Chapter note</b>'}
+          ${nt.text ? `<span>${esc(nt.text.slice(0, 160))}</span>` : ''}</a>`).join('')}</div></section>` : ''}
+    ${selecting ? `<div class="sel-actions">
+        <button type="button" class="btn" data-sel="exit">Cancel</button>
+        <button type="button" class="btn sel-del" data-sel="delete"${n ? '' : ' disabled'}>${I.trashSm} Delete${n ? ` ${n}` : ''}</button></div>`
+      : `<button type="button" class="btn cx-find" data-cxa="find">${I.searchSm} Find every mention</button>
+         <p class="hint cx-tip">Tip: long-press a value or connection to select several and delete them together.</p>`}
   </main>`;
 
   const main = app.querySelector('main');
   const redraw = () => { const y = window.scrollY; renderEntryPage(app, id).then(() => window.scrollTo(0, y)); };
-  main.addEventListener('click', e => {
+  const startSelect = key => {
+    sel = { entryId: entry.id, keys: new Set(key && items.has(key) ? [key] : []) };
+    enterPageMode(() => { sel = null; redraw(); });
+    redraw();
+  };
+  if (!selecting) onLongPress(main, '[data-key]', el => startSelect(el.dataset.key));
+
+  main.addEventListener('click', async e => {
+    if (selecting) {
+      const pk = e.target.closest('[data-pick-key]');
+      if (pk) {
+        const k = pk.dataset.pickKey;
+        if (sel.keys.has(k)) sel.keys.delete(k); else sel.keys.add(k);
+        redraw();
+        return;
+      }
+      const sa = e.target.closest('[data-selall]');
+      if (sa) {
+        const keys = fieldKeys.get(sa.dataset.selall) || [];
+        const allOn = keys.every(k => sel.keys.has(k));
+        keys.forEach(k => (allOn ? sel.keys.delete(k) : sel.keys.add(k)));
+        redraw();
+        return;
+      }
+      const sb = e.target.closest('[data-sel]');
+      if (sb?.dataset.sel === 'exit') { exitPageMode(); return; }
+      if (sb?.dataset.sel === 'delete' && sel.keys.size) {
+        const chosen = [...sel.keys].map(k => items.get(k)).filter(Boolean);
+        await trashValues(entry, chosen, { onUndone: redraw });
+        exitPageMode();
+      }
+      return;
+    }
+    const st = e.target.closest('[data-steps]');
+    if (st) { history.go(-Number(st.dataset.steps)); return; }
     const dw = e.target.closest('[data-drawer]');
     if (dw) {
       const k = dw.dataset.drawer;
@@ -782,6 +1004,11 @@ export async function renderEntryPage(app, id) {
     });
     if (b.dataset.cxa === 'edit') editor();
     if (b.dataset.cxa === 'edit-link') editor({ start: { kind: 'link', fid: b.dataset.f, i: Number(b.dataset.i) } });
+    if (b.dataset.cxa === 'edit-val') editor({ start: { kind: 'value', fid: b.dataset.f, since: Number(b.dataset.since) } });
+    if (b.dataset.cxa === 'del') {
+      const it = items.get(b.dataset.key);
+      if (it) { await trashValues(entry, [it], { onUndone: redraw }); redraw(); }
+    }
     if (b.dataset.cxa === 'find') openFind({ term: entry.name, chapterId: null, seriesId: entry.seriesId });
     if (b.dataset.cxa === 'progress') { setViewAs(entry.seriesId, null); redraw(); }
     if (b.dataset.cxa === 'viewas') {
@@ -789,7 +1016,7 @@ export async function renderEntryPage(app, id) {
         title: 'Viewing as of', chapters, value: asOf,
         sub: `${schema?.series?.name || ''} · things you learned later stay hidden`,
         quick: [{ label: 'My progress', n: progress }],
-        onPick: n => { setViewAs(entry.seriesId, n === progress ? null : n); redraw(); },
+        onPick: nn => { setViewAs(entry.seriesId, nn === progress ? null : nn); redraw(); },
       });
     }
   });
@@ -802,6 +1029,30 @@ export async function renderEntryPage(app, id) {
 
 function card(label, inner) {
   return `<section class="cx-field"><h3>${esc(label)}</h3><div class="cx-card">${inner}</div></section>`;
+}
+
+/** Trash items for one value / connection of an entry (see trash.js). */
+function itemFor(f, x, map) {
+  if (f.kind === 'link') {
+    const t = map.get(x.id);
+    const value = { id: x.id, label: x.label || '', since: x.since || 0, ...(x.until != null ? { until: x.until } : {}) };
+    return { fid: f.id, label: f.label, kind: 'link', value, text: `${t?.name || '?'}${x.label ? ` (${x.label})` : ''}` };
+  }
+  return { fid: f.id, label: f.label, kind: 'text', value: { v: x.v, since: x.since || 0 }, text: `“${String(x.v).slice(0, 40)}”` };
+}
+/** What the editor took away: text values whose chapter is gone, connections whose target is gone. */
+function removedItems(before, after, t, map) {
+  const out = [];
+  for (const f of t.fields) {
+    if (f.kind === 'link') {
+      const keep = new Set(linkValues(after, f.id).map(x => x.id));
+      for (const x of linkValues(before, f.id)) if (!keep.has(x.id)) out.push(itemFor(f, x, map));
+    } else {
+      const keep = new Set(textValues(after, f.id).map(x => x.since));
+      for (const x of textValues(before, f.id)) if (x.v && !keep.has(x.since)) out.push(itemFor(f, x, map));
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ chapter picker */
@@ -996,7 +1247,7 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
         <button type="button" class="btn" data-ed="cancel">Cancel</button>
         <button type="button" class="btn btn-accent" data-ed="save">${entry ? 'Save' : 'Add'}</button>
       </div>
-      ${entry ? `<button type="button" class="btn cx-delete${confirmDelete ? ' is-confirm' : ''}" data-ed="delete">${I.trashSm} ${confirmDelete ? 'Tap again to delete' : 'Delete entry'}</button>` : ''}`;
+      ${entry ? `<button type="button" class="btn cx-delete${confirmDelete ? ' is-confirm' : ''}" data-ed="delete">${I.trashSm} Delete entry</button>` : ''}`;
   };
 
   /* ---- step views ---- */
@@ -1021,7 +1272,7 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       <p class="hint" style="margin:0">${w.until != null
         ? `Shows as a normal link from Ch. ${fmtNum(w.since || 1)} to Ch. ${fmtNum(w.until)}. After that it moves to “Past”, with its chapters.`
         : `Shows from Ch. ${fmtNum(w.since || 1)} on. If it stops being true (someone leaves, dies, breaks up), choose Ended.`}</p>
-      <button type="button" class="btn cx-delete${v.confirm ? ' is-confirm' : ''}" data-lv="remove">${I.trashSm} ${v.confirm ? 'Tap again to remove' : 'Remove connection'}</button>
+      <button type="button" class="btn cx-delete${v.confirm ? ' is-confirm' : ''}" data-lv="remove">${I.trashSm} Remove connection</button>
       <div class="two-btns"><button type="button" class="btn" data-lv="cancel">Cancel</button>
         <button type="button" class="btn btn-accent" data-lv="done">Done</button></div>`;
   };
@@ -1033,7 +1284,7 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
         ${f.kind === 'longtext' ? `<textarea class="text-area" rows="4" data-vv>${esc(v.w.v)}</textarea>`
           : `<input class="text-input" data-vv value="${esc(v.w.v)}" autocomplete="off">`}</label>
       ${chBtn('vsince', 'True from', v.w.since || nums[0])}
-      <button type="button" class="btn cx-delete${v.confirm ? ' is-confirm' : ''}" data-vw="remove">${I.trashSm} ${v.confirm ? 'Tap again to remove' : 'Remove this value'}</button>
+      <button type="button" class="btn cx-delete${v.confirm ? ' is-confirm' : ''}" data-vw="remove">${I.trashSm} Remove this value</button>
       <div class="two-btns"><button type="button" class="btn" data-vw="cancel">Cancel</button>
         <button type="button" class="btn btn-accent" data-vw="done">Done</button></div>`;
   };
@@ -1088,8 +1339,11 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       draft.fields[fid] = rest.sort((a, b) => a.since - b.since);
     }
     const saved = await db.putCodexEntry({ ...draft, name: nm });
-    toast(entry ? 'Entry saved' : 'Added to the Codex');
     closeOverlay();
+    // Values and connections removed in the editor go to the Trash.
+    const gone = entry ? removedItems(entry, saved, tdef(), map()) : [];
+    if (gone.length) await recordValues(entry, gone, { onUndone: () => onSaved?.(saved) });
+    else toast(entry ? 'Entry saved' : 'Added to the Codex');
     onSaved?.(saved);
     return true;
   };
@@ -1108,6 +1362,10 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
   if (start?.kind === 'link') {
     const x = linkValues(draft, start.fid)[start.i];
     if (x) pushView({ kind: 'link', fid: start.fid, i: start.i, w: { ...x }, direct: true });
+  }
+  if (start?.kind === 'value') {
+    const x = textValues(draft, start.fid).find(y => y.since === start.since);
+    if (x) pushView({ kind: 'value', fid: start.fid, orig: x.since, w: { ...x }, direct: true });
   }
 
   const addLink = id => {
@@ -1190,7 +1448,6 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       if (act === 'ended') { v.w.until = v.w.until ?? Math.max(v.w.since || nums[0], changeAt); draw(); }
       if (act === 'cancel') { if (v.direct) closeOverlay(); else popView(); }
       if (act === 'remove') {
-        if (!v.confirm) { v.confirm = true; draw(); return; }
         draft.fields[v.fid] = linkValues(draft, v.fid).filter((_, i) => i !== v.i)
           .map(x => (x.until == null ? { id: x.id, label: x.label, since: x.since } : x));
         if (v.direct) await saveEntry(); else popView();
@@ -1206,17 +1463,16 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       const b = e.target.closest('[data-vw]');
       if (!b) return;
       const act = b.dataset.vw;
-      if (act === 'cancel') popView();
+      if (act === 'cancel') { if (v.direct) closeOverlay(); else popView(); }
       if (act === 'remove') {
-        if (!v.confirm) { v.confirm = true; draw(); return; }
         draft.fields[v.fid] = textValues(draft, v.fid).filter(x => x.since !== v.orig);
-        popView();
+        if (v.direct) await saveEntry(); else popView();
       }
       if (act === 'done') {
         const rest = textValues(draft, v.fid).filter(x => x.since !== v.orig && x.since !== v.w.since);
         rest.push({ v: v.w.v.trim(), since: v.w.since });
         draft.fields[v.fid] = rest.sort((a, b) => a.since - b.since);
-        popView();
+        if (v.direct) await saveEntry(); else popView();
       }
       return;
     }
@@ -1257,10 +1513,8 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
     if (!act) return;
     if (act.dataset.ed === 'cancel') { closeOverlay(); return; }
     if (act.dataset.ed === 'delete') {
-      if (!confirmDelete) { confirmDelete = true; draw(); return; }
-      await db.deleteCodexEntry(entry.id);
-      toast('Entry deleted');
       closeOverlay();
+      await trashEntry(entry, typeIn(schema, entry).name);
       onDeleted?.();
       return;
     }
