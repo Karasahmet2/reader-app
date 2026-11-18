@@ -84,6 +84,7 @@ export function ensureFont(id) {
 export const ensureAllFonts = () => Object.keys(FONTS).forEach(ensureFont);
 
 export const DEFAULTS = {
+  backupKeys: true, // Backup: include the Merriam-Webster keys
   trashDays: 30, // Settings → Trash: empty automatically after this many days (0 = never)
   theme: 'night',
   favThemes: ['night', 'dusk', 'paper'], // the reader's theme button cycles through these

@@ -1066,7 +1066,12 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       });
       return;
     }
-    if (mark) { notes.openNoteCard(Number(mark.dataset.note), noteCtx); return; }
+    if (mark) {
+      const ids = notes.notesAt(e.target);
+      if (ids.length > 1) notes.openNotesHere(ids, id => notes.openNoteCard(id, noteCtx));
+      else notes.openNoteCard(Number(mark.dataset.note), noteCtx);
+      return;
+    }
     lastY = window.scrollY;
     document.body.classList.toggle('controls-open');
   });
@@ -1819,14 +1824,21 @@ async function renderBackup() {
     ${statusHtml}
     <section class="set-card included" aria-label="What a backup includes">
       <p class="label" style="padding:0">One file includes</p>
-      ${['All series and chapter texts', 'Reading progress and read marks', 'Notes, highlights and tags', 'Covers and reading settings']
-        .map(t => `<span>${I.check}${t}</span>`).join('')}
+      ${[['Series, chapters, covers and reading progress'], ['Notes, tags and the Codex'],
+        ['Settings', 'Theme, fonts and text size, reading options, Show tips, Trash timing'],
+        ['Your choices per series', 'Hidden tags and Codex rooms in the reader, Codex sort and rooms, Notes filters']]
+        .map(([t, sub]) => `<span>${I.check}<span class="inc-txt">${t}${sub ? `<small>${sub}</small>` : ''}</span></span>`).join('')}
       <small>Right now: ${seriesCount(count.series)}, ${plural(count.chapters, 'chapter')}, ${plural(count.notes, 'note')}.</small>
     </section>
+    <label class="set-row set-card">
+      <span class="txt"><b>Include dictionary keys</b><small>Your Merriam-Webster keys, so Define works right after a restore. Turn off if you share the file.</small></span>
+      <input type="checkbox" role="switch" data-toggle="backupKeys" ${settings.backupKeys !== false ? 'checked' : ''}>
+    </label>
     <label class="set-row set-card">
       <span class="txt"><b>Remind me weekly</b><small>A small nudge in the Library when it’s been a while</small></span>
       <input type="checkbox" role="switch" data-toggle="backupReminder" ${settings.backupReminder ? 'checked' : ''}>
     </label>
+    <p class="hint backup-not"><b>Not in the backup:</b> your own sounds (add them again), the Trash, saved dictionary look-ups and the offline WordNet pack (download it again in Settings).</p>
     <div class="backup-actions">
       <button type="button" class="btn btn-accent" data-action="create-backup" ${count.series ? '' : 'disabled'}>${I.download} Create backup file</button>
       <button type="button" class="btn" data-action="restore-backup">${I.upload} Restore from a backup</button>
@@ -1877,6 +1889,15 @@ backupInput.addEventListener('change', async () => {
       <div><small>On this phone now</small>
         <b>${seriesCount(now.series)} · ${plural(now.chapters, 'chapter')} · ${plural(now.notes, 'note')}</b></div>
     </div>
+    <p class="label" style="padding:0 4px;margin:0">Bring back</p>
+    <div class="set-card">
+      <div class="set-row"><span class="txt"><b>Library, notes and Codex</b><small>Always — this is the backup itself</small></span>${I.check}</div>
+      ${incoming.hasSettings ? `<label class="set-row"><span class="txt"><b>Settings and per-series choices</b><small>Theme, fonts, reading options, hidden tags and rooms</small></span>
+        <input type="checkbox" role="switch" data-rs-opt="settings" checked></label>` : ''}
+      ${incoming.hasKeys ? `<label class="set-row"><span class="txt"><b>Dictionary keys</b><small>Merriam-Webster Learner’s and Collegiate</small></span>
+        <input type="checkbox" role="switch" data-rs-opt="keys" checked></label>` : ''}
+    </div>
+    ${!incoming.hasSettings ? '<p class="hint" style="margin:0">This backup has no settings in it, so your current settings stay.</p>' : ''}
     <p class="hint" style="font-size:14px">Restoring <b style="color:var(--danger)">replaces everything</b> on this phone with the backup. Anything added after the backup was made will be gone.</p>
     <div class="two-btns">
       <button type="button" class="btn" data-rb="cancel">Cancel</button>
@@ -1889,8 +1910,9 @@ backupInput.addEventListener('change', async () => {
       b.disabled = true;
       b.textContent = 'Restoring…';
       try {
-        const restored = await backup.restoreBackup(data);
-        saveSettings({ ...settings, ...restored, lastBackupAt: data.exportedAt || Date.now(), backupSnoozeUntil: 0 });
+        const opt = k => !!sheet.querySelector(`[data-rs-opt="${k}"]`)?.checked;
+        const next = await backup.restoreBackup(data, { current: settings, settings: opt('settings'), keys: opt('keys') });
+        saveSettings({ ...next, lastBackupAt: data.exportedAt || Date.now(), backupSnoozeUntil: 0 });
         sessionStorage.setItem('reader-toast', 'Backup restored');
         location.replace('#/');
         location.reload();

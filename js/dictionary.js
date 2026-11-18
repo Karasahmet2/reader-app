@@ -11,7 +11,7 @@
 // Every sheet also has links to open the word on Cambridge, Oxford and Longman.
 
 import * as db from './db.js';
-import { esc, I, svg, toast, openSheet } from './ui.js';
+import { esc, I, svg, plural, toast, openSheet } from './ui.js';
 import { loadSettings } from './settings.js';
 
 const FREE_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
@@ -525,13 +525,34 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       const r = results[k];
       b.setAttribute('aria-selected', String(k === tab));
       const sub = k === 'mw' ? MW_NAMES[(r?.status === 'ok' && r.ref) || mwRef] : TABS[k][1];
-      b.querySelector('small').textContent = !r ? sub
+      const n = picksIn(k);
+      b.querySelector('small').textContent = n ? `${n} ticked` : !r ? sub
         : r.status === 'nokey' ? 'add keys' : r.status === 'none' ? 'not found'
           : r.status === 'offline' ? 'no connection' : r.fallback ? 'offline pack' : sub;
+      b.classList.toggle('has-picks', !!n);
     });
   };
 
   const info = () => (results[tab]?.status === 'ok' ? results[tab].info : null);
+
+  /* Ticked meanings (any tab). key → { pos, text, example, src, withEx } */
+  let picks = new Map();
+  const srcOf = () => (tab === 'mw' ? `mw:${(results.mw?.status === 'ok' && results.mw.ref) || mwRef}` : tab);
+  const SRC_NAME = { wiki: 'Wiktionary', pack: 'WordNet', 'mw:learners': 'Webster', 'mw:collegiate': 'Webster' };
+  const picksIn = t => [...picks.values()].filter(p => (t === 'mw' ? p.src.startsWith('mw') : p.src === t)).length;
+  /** The note text for the ticked meanings (one line each, with its word type). */
+  const picksText = () => {
+    const list = [...picks.values()];
+    const mixed = new Set(list.map(p => SRC_NAME[p.src])).size > 1;
+    return list.map(p => `${p.pos} — ${p.text}${mixed && !p.src.startsWith('mw') ? `  (${SRC_NAME[p.src]})` : ''}${p.withEx && p.example ? `\n   “${p.example}”` : ''}`).join('\n');
+  };
+  const saveLabel = () => {
+    if (!picks.size) return `${I.note} Save as vocabulary note`;
+    const by = {};
+    for (const p of picks.values()) by[SRC_NAME[p.src]] = (by[SRC_NAME[p.src]] || 0) + 1;
+    const from = Object.entries(by).map(([n, c]) => `${c} from ${n}`).join(' · ');
+    return `<span class="def-save"><b>${I.note} Save ${plural(picks.size, 'meaning')}</b><small>${Object.keys(by).length > 1 ? from : `from ${Object.keys(by)[0]}`}</small></span>`;
+  };
 
   const openIn = () => `<div class="def-open"><span>Open in</span>
     ${OPEN_IN.map(([name, url]) => `<a href="${url(info()?.word || word)}" target="_blank" rel="noopener">${name}${OUT}</a>`).join('')}</div>`;
@@ -595,19 +616,28 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
         </div>
         ${mwSwitch(res)}
         ${res.fallback ? '<p class="def-msg is-small">No connection — showing the offline dictionary.</p>' : ''}
-        ${i.parts.map(([pos, defs]) => `
+        ${i.parts.map(([pos, defs], pi) => `
           <section class="def-part">
             <span class="def-pos">${esc(pos)}</span>
-            <ol>${defs.map(d => `<li><span>${esc(d.text)}</span>${d.example ? `<em>“${esc(d.example)}”</em>` : ''}${d.sub ? `<span class="def-subsense">${esc(d.sub)}</span>` : ''}</li>`).join('')}</ol>
+            <ol>${defs.map((d, di) => {
+              const key = `${srcOf()}|${pi}|${di}`;
+              const p = picks.get(key);
+              return `<li class="def-sense${p ? ' is-picked' : ''}" data-pick="${esc(key)}" data-pos="${esc(pos)}" role="button" tabindex="0" aria-pressed="${!!p}">
+                <span class="def-box" aria-hidden="true">${p ? I.checkSm : ''}</span>
+                <span class="def-body"><span>${esc(d.text)}</span>${d.example ? `<em>“${esc(d.example)}”</em>` : ''}${d.sub ? `<span class="def-subsense">${esc(d.sub)}</span>` : ''}
+                ${p && d.example ? `<button type="button" class="def-exsw" data-pickex="${esc(key)}" role="switch" aria-checked="${p.withEx}"><i aria-hidden="true"></i>Include example</button>` : ''}</span></li>`;
+            }).join('')}</ol>
           </section>`).join('')}
         ${chips('Similar words', i.synonyms)}
         ${chips('Forms', i.forms)}
         <div class="def-actions">
-          <button type="button" class="btn btn-accent" data-def="note">${I.note} Save as vocabulary note</button>
+          <button type="button" class="btn btn-accent def-save-btn" data-def="note">${saveLabel()}</button>
           <div class="two-btns">
             <button type="button" class="btn" data-def="find">${I.searchSm} Find uses</button>
-            <button type="button" class="btn" data-def="copy">${I.copy} Copy</button>
+            ${picks.size ? `<button type="button" class="btn" data-def="clear">${svg('<path d="M6 6l12 12M18 6L6 18"/>', 16, 2)} Clear ticks</button>`
+              : `<button type="button" class="btn" data-def="copy">${I.copy} Copy</button>`}
           </div>
+          <p class="hint tip def-pick-tip">Tap meanings to tick the ones you want to save — from any tab. Nothing ticked saves the first meanings.</p>
         </div>
         ${openIn()}
         ${footer(res)}`;
@@ -665,6 +695,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
 
   function showWord(w) {
     word = w;
+    picks = new Map();
     results = {};
     peek = {};
     mwResults = {};
@@ -672,6 +703,10 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
     load(tab);
   }
 
+  // Meanings are ticked with Enter / Space too.
+  sheet.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-pick]')) { e.preventDefault(); e.target.click(); }
+  });
   sheet.addEventListener('click', async e => {
     const t = e.target.closest('[data-tab]');
     if (t) {
@@ -691,12 +726,34 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       load('mw');
       return;
     }
+    const ex = e.target.closest('[data-pickex]');
+    if (ex) {
+      const p = picks.get(ex.dataset.pickex);
+      if (p) { p.withEx = !p.withEx; render(); }
+      return;
+    }
+    const pk = e.target.closest('[data-pick]');
+    if (pk) {
+      const key = pk.dataset.pick;
+      if (picks.has(key)) picks.delete(key);
+      else {
+        const [, pi, di] = key.split('|').map(Number);
+        const i = info();
+        const d = i?.parts[pi]?.[1]?.[di];
+        if (d) picks.set(key, { pos: i.parts[pi][0], text: d.text, example: d.example || '', src: srcOf(), withEx: false });
+      }
+      const y = sheet.scrollTop;
+      render();
+      sheet.scrollTop = y;
+      return;
+    }
     const again = e.target.closest('[data-def-word]');
     if (again) { showWord(cleanWord(again.dataset.defWord)); return; }
     const b = e.target.closest('[data-def]');
     if (!b) return;
     const act = b.dataset.def;
-    if (act === 'note') onNote(info() ? noteText(info()) : '');
+    if (act === 'note') onNote(picks.size ? picksText() : info() ? noteText(info()) : '');
+    else if (act === 'clear') { picks.clear(); render(); }
     else if (act === 'find') onFind(word);
     else if (act === 'codex') onCodex?.(word);
     else if (act === 'copy') {

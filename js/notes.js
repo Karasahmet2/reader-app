@@ -207,9 +207,10 @@ function wrap(p, from, to, note, color, kind) {
 /** Draw all notes of a chapter into its paragraphs. */
 export function applyMarks(paras, noteList, tags) {
   const tagsById = byId(tags);
-  for (const note of noteList) {
-    const loc = locate(note, paras);
-    if (!loc) continue;
+  // Longest first, so a word note inside a sentence note is drawn inside it (and gets the lower line).
+  const placed = noteList.map(note => ({ note, loc: locate(note, paras) })).filter(x => x.loc)
+    .sort((a, b) => ((b.loc.ep - b.loc.sp) - (a.loc.ep - a.loc.sp)) || ((b.loc.eo - b.loc.so) - (a.loc.eo - a.loc.so)));
+  for (const { note, loc } of placed) {
     const firstTag = tagsOf(note, tagsById)[0];
     const color = firstTag ? tagColor(firstTag.color) : 'var(--accent)';
     const kind = note.text || firstTag ? 'is-note' : 'is-highlight';
@@ -218,6 +219,44 @@ export function applyMarks(paras, noteList, tags) {
       wrap(paras[i], i === loc.sp ? loc.so : 0, i === loc.ep ? loc.eo : len, note, color, kind);
     }
   }
+  // Notes inside notes: each underline sits a little lower than the one around it.
+  for (const p of paras) {
+    p.querySelectorAll('mark.note-mark.is-note').forEach(m => {
+      let depth = 0;
+      for (let a = m.parentElement; a && a !== p; a = a.parentElement) if (a.matches('mark.note-mark.is-note')) depth++;
+      if (depth) m.dataset.depth = String(Math.min(depth, 2));
+    });
+  }
+}
+
+/** Every note at a tapped spot (innermost first). */
+export function notesAt(target) {
+  const ids = [];
+  for (let m = target.closest('mark.note-mark'); m; m = m.parentElement?.closest('mark.note-mark')) {
+    const id = Number(m.dataset.note);
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/** "2 notes here": pick which of the overlapping notes to open. */
+export async function openNotesHere(ids, onPick) {
+  const all = await db.getAllNotes();
+  const tagsById = byId(await db.getAllTags());
+  const list = ids.map(id => all.find(n => n.id === id)).filter(Boolean);
+  openSheet(`<h2>${plural(list.length, 'note')} here</h2>
+    <div class="here-list">${list.map(n => {
+      const t = tagsOf(n, tagsById)[0];
+      return `<button type="button" class="here-row" data-here="${n.id}" style="--mc:${t ? tagColor(t.color) : 'var(--accent)'}">
+        <span class="txt"><b>${esc(short(n.quote || 'Chapter note', 60))}</b>${n.text ? `<span>${esc(short(n.text.split('\n')[0], 90))}</span>` : ''}
+          <small>${t ? esc(t.name) : 'Highlight'} · ${n.quote && n.quote.split(/\s+/).length <= 3 ? 'the word' : 'the passage'}</small></span>${I.chevron}</button>`;
+    }).join('')}</div>`, sheet => {
+    sheet.addEventListener('click', e => {
+      const b = e.target.closest('[data-here]');
+      if (!b) return;
+      onPick(Number(b.dataset.here)); // the note card replaces this sheet (no extra back step)
+    });
+  });
 }
 
 /* ------------------------------------------------------------------ selection bar */

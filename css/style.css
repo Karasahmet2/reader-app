@@ -2148,3 +2148,52 @@ button.cx-peek-head:active { background: var(--surface-2); }
 button.cx-peek-head .txt { flex: 1; display: flex; flex-direction: column; gap: 3px; }
 button.cx-peek-head > svg { color: var(--muted); flex-shrink: 0; }
 .cx-peek-row b { font-weight: 400; color: var(--strong); }
+
+/* Update 14 · ticked meanings, notes inside notes, backup contents */
+.def-part ol { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; counter-reset: sense; }
+.def-part li.def-sense {
+  counter-increment: sense; display: flex; gap: 10px; align-items: flex-start; margin: 0 -10px; padding: 9px 10px;
+  border-radius: 14px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.def-part li.def-sense::before { content: counter(sense); width: 14px; flex-shrink: 0; order: 1; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.def-box { order: 0; width: 22px; height: 22px; flex-shrink: 0; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center;
+  border: 2px solid var(--surface-3); border-radius: 7px; box-sizing: border-box; color: var(--on-accent); }
+.def-body { order: 2; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.def-sense.is-picked { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.def-sense.is-picked .def-box { background: var(--accent); border-color: var(--accent); }
+.def-exsw { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; padding: 4px 0; background: none; border: 0; color: var(--text); font: 12px var(--ui-font); }
+.def-exsw i { position: relative; width: 34px; height: 20px; border-radius: 10px; background: var(--surface-3); }
+.def-exsw i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: var(--strong); transition: transform .15s; }
+.def-exsw[aria-checked="true"] i { background: var(--accent); }
+.def-exsw[aria-checked="true"] i::after { transform: translateX(14px); background: var(--bg); }
+.def-save-btn { min-height: 54px; }
+.def-save { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.def-save b { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.def-save small { font-size: 12px; font-weight: 400; opacity: .78; }
+.def-tabs button.has-picks small { color: var(--accent); opacity: 1; }
+.def-tabs button[aria-selected="true"].has-picks small { color: inherit; }
+.def-pick-tip { margin: 0; text-align: center; font-size: 12px; }
+
+/* a note inside a note gets its line a little lower */
+mark.note-mark.is-note[data-depth="1"] { text-underline-offset: 10px; }
+mark.note-mark.is-note[data-depth="2"] { text-underline-offset: 15px; }
+.here-list { display: flex; flex-direction: column; gap: 10px; }
+.here-row {
+  display: flex; align-items: center; gap: 10px; padding: 0 12px 0 0; background: var(--surface-2); border: 0; border-radius: 14px;
+  overflow: hidden; text-align: left; color: inherit; font: inherit; box-shadow: inset 5px 0 0 var(--mc);
+}
+.here-row .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px 12px 19px; }
+.here-row .txt b { font: 500 16px 'Lexend', sans-serif; color: var(--bright); }
+.here-row .txt span { font-size: 13px; color: var(--text); }
+.here-row .txt small { font-size: 11px; color: var(--muted); }
+.here-row > svg { color: var(--muted); flex-shrink: 0; }
+
+/* backup */
+.included > span { align-items: flex-start; }
+.included .inc-txt { display: flex; flex-direction: column; gap: 2px; }
+.included .inc-txt small { font-size: 12px; line-height: 1.45; color: var(--muted); }
+.backup-not { margin: 0; padding: 12px 14px; border: 1.5px dashed var(--surface-3); border-radius: 14px; font-size: 12px; line-height: 1.5; }
+.backup-not b { color: var(--text); font-weight: 600; }
+.def-body > span { display: block; font-size: 15px; line-height: 1.5; color: var(--strong); }
+.def-body > em { display: block; margin-top: 4px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.def-body > .def-subsense { display: block; margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--surface-3); font-size: 14px; line-height: 1.5; color: var(--text); }

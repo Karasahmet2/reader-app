@@ -202,6 +202,23 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 14 — Pick the meanings to save, notes inside notes, settings in the backup
+
+- **Define → tick meanings**: tap the meanings you want (from any tab — Webster, Wiktionary,
+  Offline); the button becomes "Save 3 meanings · 2 from Webster · 1 from Wiktionary". A ticked
+  meaning with an example gets an "Include example" switch. Nothing ticked = first meanings, as before.
+- **Notes inside notes**: a word note inside a sentence note gets its own line just below the
+  sentence's line, so both colours show. Tapping where they overlap opens "2 notes here" to pick one.
+- **Backup**: now also saves your per-series choices (hidden tags and Codex rooms, Codex sort and
+  rooms, Notes filters, dictionary tab, sound volumes). "Include dictionary keys" decides whether
+  your Merriam-Webster keys go in the file. When restoring you choose whether settings and keys come
+  back. Older backups still restore (your current settings stay).
+
+### Tests
+`tests/` holds automated checks for the app (navigation, tags, Codex, Trash, tips, this update).
+Run them from the reader-app folder with `python3 tests/run_all.py` (needs Python + Playwright).
+They aren't needed to use the app.
+
 ## Update 13 — Shorter entry line, "Add files", Show tips
 
 - Codex entries say just "Character · Ch. 1" (the "Known from" chapter); tap Ch. 1 to open that
@@ -327,7 +344,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v20` → `reader-v21`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v21` → `reader-v22`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.
