@@ -129,6 +129,7 @@ export async function restoreBackup(backup, { current = {}, settings = true, key
     tags: d.tags || [],
     notes: d.notes || [],
     codex: d.codex || [],
+    words: d.words || [],
   });
   const saved = backup.settings || {};
   let next = { ...current };

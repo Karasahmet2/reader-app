@@ -2197,3 +2197,77 @@ mark.note-mark.is-note[data-depth="2"] { text-underline-offset: 15px; }
 .def-body > span { display: block; font-size: 15px; line-height: 1.5; color: var(--strong); }
 .def-body > em { display: block; margin-top: 4px; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .def-body > .def-subsense { display: block; margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--surface-3); font-size: 14px; line-height: 1.5; color: var(--text); }
+
+/* Update 15 · Vocabulary as words */
+.notes-words { margin-left: auto; height: 38px; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.notes-words + .icon-btn { margin-left: 0; }
+.tag-fixed { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; background: var(--surface-2); border-radius: 13px; font-size: 11px; color: var(--text); }
+.wd-save, .wd-card, .we-box { display: flex; flex-direction: column; gap: 14px; }
+.wd-save h2, .wd-card h2, .we-box h2 { margin: 0; }
+.wd-match { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 16px;
+  background: color-mix(in srgb, var(--wd-voc, #5a8cff) 12%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wd-voc, #5a8cff) 45%, transparent); }
+.wd-match-h { margin: 0; display: flex; align-items: center; gap: 10px; color: var(--wd-voc, #5a8cff); }
+.wd-match-h b { font-size: 15px; color: var(--strong); }
+.wd-match-why { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text); }
+.wd-match-why b { color: var(--bright); }
+.wd-dict { display: flex; flex-direction: column; gap: 12px; }
+.wd-group { display: flex; flex-direction: column; gap: 6px; }
+.wd-group ol { margin: 0; padding: 0 0 0 22px; display: flex; flex-direction: column; gap: 8px; color: var(--muted); }
+.wd-group li > span { display: block; font-size: 15px; line-height: 1.5; color: var(--strong); }
+.wd-group li > em { display: block; margin-top: 3px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.wd-src { font-size: 11px; color: var(--muted); }
+.wd-head { display: flex; align-items: center; gap: 12px; }
+.wd-head .txt { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.wd-head h2 { font: 500 26px 'Lexend', sans-serif; color: var(--bright); }
+.wd-head small { font-size: 12px; color: var(--muted); }
+.wd-say { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-radius: 22px; }
+.wd-forms { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wd-forms small { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.wd-forms .chip { height: 32px; }
+.wd-tabs i { display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle; border-radius: 3px; background: var(--accent); }
+.wd-mine { min-height: 130px; }
+.wd-places { display: flex; flex-direction: column; gap: 8px; }
+.wd-place-list { display: flex; flex-direction: column; background: var(--bg); border-radius: 14px; overflow: hidden; }
+.wd-place { min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 6px 14px; color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.45; }
+.wd-place + .wd-place { border-top: 1px solid var(--surface); }
+.wd-place span { flex: 1; min-width: 0; }
+.wd-place small { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.wd-place.is-here { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.wd-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.wd-actions .btn { height: 44px; font-size: 13px; gap: 6px; }
+.wd-remove { color: var(--danger); background: none; }
+.we-forms { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; background: var(--bg); border: 1.5px solid var(--surface-3); border-radius: 14px; }
+.we-forms .chip { height: 34px; }
+.we-forms input { flex: 1; min-width: 140px; height: 34px; background: none; border: 0; outline: 0; color: var(--strong); font: 14px var(--ui-font); }
+.we-suggest { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.we-suggest small { font-size: 12px; color: var(--muted); }
+.chip.is-dashed { background: none; border: 1.5px dashed var(--surface-3); color: var(--accent); }
+.we-merged { min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 14px; background: var(--bg); border-radius: 14px; font-size: 14px; color: var(--strong); }
+.we-merged span { flex: 1; }
+.we-merged .btn { height: 36px; padding: 0 12px; }
+.wd-pick-list { display: flex; flex-direction: column; background: var(--bg); border-radius: 16px; overflow: hidden; max-height: 48vh; overflow-y: auto; }
+.wd-pick { min-height: 58px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: none; border: 0; text-align: left; color: inherit; font: inherit; }
+.wd-pick + .wd-pick { border-top: 1px solid var(--surface); }
+.wd-pick .txt { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.wd-pick .txt b { font-weight: 500; font-size: 15px; color: var(--bright); }
+.wd-pick .txt small { font-size: 12px; color: var(--muted); }
+.wd-pick em { font-style: normal; font-size: 12px; color: var(--accent); }
+.wd-pick.is-likely { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* saved words met again */
+span.wd-met { text-decoration: underline dotted var(--wd-met, #4fc8b8); text-decoration-thickness: 2px; text-underline-offset: 5px; cursor: pointer; }
+.vis-met { width: 14px; height: 0; border-bottom: 2.5px dotted; flex-shrink: 0; }
+/* words list */
+.words-page { display: flex; flex-direction: column; gap: 12px; }
+.words-page .row-head .txt { flex: 1; display: flex; flex-direction: column; }
+.words-page .row-head small { font-size: 12px; color: var(--muted); }
+.words-series { height: 38px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.words-sort { display: flex; gap: 8px; }
+.words-sort .chip.is-on { background: var(--strong); color: var(--bg); }
+.words-list { display: flex; flex-direction: column; background: var(--surface); border-radius: 18px; overflow: hidden; }
+.word-row { min-height: 64px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 10px 16px; background: none; border: 0; text-align: left; color: inherit; font: inherit; }
+.word-row + .word-row { border-top: 1px solid var(--surface-2); }
+.wr-top { display: flex; align-items: baseline; gap: 8px; }
+.wr-top b { font: 500 17px 'Lexend', sans-serif; color: var(--bright); }
+.wr-top small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wr-top em { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.wr-mean { font-size: 13px; line-height: 1.45; color: var(--text); }

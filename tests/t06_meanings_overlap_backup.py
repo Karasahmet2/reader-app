@@ -34,11 +34,14 @@ async def main():
         if await page.query_selector('[data-pickex]'):
             await page.click('[data-pickex] >> nth=0')
         await page.screenshot(path=f'{SH}/u16-define.png')
-        await page.click('[data-def="note"]'); await page.wait_for_selector('#note-text')
-        txt = await page.input_value('#note-text'); print('  note text:\n   ' + txt.replace('\n', '\n   '))
-        assert txt.count(' — ') == 2
+        await page.click('[data-def="note"]'); await page.wait_for_selector('.wd-save')
+        sheet = await page.inner_text('.wd-save'); print('  save sheet:', sheet.replace('\n', ' | ')[:200])
+        assert await page.eval_on_selector_all('.wd-dict li', 'e => e.length') == 2
         await page.screenshot(path=f'{SH}/u16-note.png')
-        await page.click('[data-ne="save"]'); await page.wait_for_timeout(600)
+        await page.click('[data-wd="new"]'); await page.wait_for_timeout(600)
+        txt = await page.evaluate("import('./js/db.js').then(d => d.getAllNotes()).then(l => l.find(n => n.quote === 'glass').text)")
+        print('  note text:', txt.replace('\n', ' / '))
+        assert txt.count(' — ') == 2
 
         # ---- 2. a sentence note around the word note
         sentence = 'Winston Smith slipped quickly through the glass doors of Victory Mansions.'

@@ -202,6 +202,26 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 15 — Vocabulary as words
+
+- **Vocabulary is built in**: every series has a Vocabulary tag, always first; it can't be renamed
+  or deleted (you can change its colour and the "met again" colour). An old tag called "Vocab…"
+  became the built-in one.
+- **Words, shared by all series**: a word is saved once and collects every place you met it.
+  Old vocabulary notes were turned into words automatically ("verb — …" lines became dictionary
+  meanings, the rest became My notes; notes of the same word were joined).
+- **Saving from Define**: if the dictionary gives the same entry as a word you saved before
+  (e.g. "regarded" → regard), the sheet says "Same word as regard" with **Add to "regard"** or
+  **Save as new word**.
+- **Word card** (tap a vocabulary note or a dotted word): forms, **Dictionary** (meanings grouped
+  by noun / verb / …) and **My notes** tabs, and **Where you met it** (tap to jump there).
+  Edit (base form, other forms, detach), Define (add more meanings), Attach… (join with another word).
+- **Met again**: other appearances of saved words (any form, any series) get a dotted line in a
+  second colour. Switch it off in the eye panel → Notes → "Saved words met again".
+- **Words list**: Notes → Words. Search words and forms, sort A–Z / Recently saved / Most met, and
+  show all series or only one.
+- Deleting a word puts it and its places in the Trash (Undo works).
+
 ## Update 14 — Pick the meanings to save, notes inside notes, settings in the backup
 
 - **Define → tick meanings**: tap the meanings you want (from any tab — Webster, Wiktionary,
@@ -344,7 +364,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v21` → `reader-v22`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v22` → `reader-v23`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

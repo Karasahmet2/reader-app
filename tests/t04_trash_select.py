@@ -103,10 +103,15 @@ async def main():
         print('  phone back exits select:', await page.evaluate("document.querySelector('.notes-selbar').hidden"), await H())
         # 9 tag delete → restore
         await page.goto(B+'#/series/1/tags'); await page.wait_for_timeout(500)
-        await page.click('.tags-row:has-text("Vocab")'); await page.click('[data-te="delete"]'); await page.wait_for_timeout(600)
-        cnt=lambda: page.evaluate("import('./js/db.js').then(d=>d.getAllNotes()).then(l=>l.filter(n=>n.tagIds.includes(6)).length)")
-        print('9 vocab notes after delete:', await cnt(), await page.inner_text('#toast'))
+        # (Vocabulary is built in and can't be deleted any more, so this uses Plot.)
+        plot = await page.evaluate("import('./js/db.js').then(d=>d.getAllTags()).then(l=>l.find(t=>t.name==='Plot'&&t.seriesId===1).id)")
+        cnt=lambda: page.evaluate(f"import('./js/db.js').then(d=>d.getAllNotes()).then(l=>l.filter(n=>n.tagIds.includes({plot})).length)")
+        before = await cnt()
+        await page.click('.tags-row:has-text("Plot")'); await page.click('[data-te="delete"]'); await page.wait_for_timeout(600)
+        print('9 plot notes before/after delete:', before, await cnt(), await page.inner_text('#toast'))
+        assert await cnt() == 0
         await page.click('#toast button'); await page.wait_for_timeout(600); print('  after undo:', await cnt())
+        assert await cnt() == before
         print('errors:', errs)
         await b.close()
 asyncio.run(main())

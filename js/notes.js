@@ -87,10 +87,10 @@ export async function migrateTagScopes() {
   return todo.length;
 }
 
-/** This series' own Vocabulary tag, if it has one ("Save as vocabulary note" picks it). */
+/** This series' built-in Vocabulary tag (made if missing). */
 export async function vocabularyTag(seriesId) {
-  const tags = await db.getAllTags();
-  return tags.find(t => t.seriesId === seriesId && /^vocab/i.test(t.name)) || null;
+  const { vocabTag } = await import('./words.js');
+  return vocabTag(seriesId);
 }
 
 /** Update 10: no shared tags any more. Each shared tag is copied into every series whose
@@ -198,6 +198,7 @@ function wrap(p, from, to, note, color, kind) {
     const m = document.createElement('mark');
     m.className = `note-mark ${kind}`;
     m.dataset.note = note.id;
+    if (note.wordId) m.dataset.word = note.wordId;
     m.style.setProperty('--mc', color);
     t.parentNode.insertBefore(m, t);
     m.appendChild(t);
@@ -406,6 +407,7 @@ export function setupSelectionBar(textEl, paras, onAction) {
  *  onSaved: called after saving
  */
 export async function openNoteEditor({ note, where, onSaved }) {
+  await vocabularyTag(note.seriesId);
   let tags = await db.getAllTags();
   const series = await db.getSeries(note.seriesId);
   const selected = new Set(note.tagIds || []);
@@ -506,7 +508,14 @@ export async function openNoteEditor({ note, where, onSaved }) {
       if (act.dataset.ne === 'cancel') { closeOverlay(); return; }
       const text = sheet.querySelector('#note-text').value.trim();
       if (!note.quote && !text) { toast('Write something first'); return; }
-      const savedId = await db.putNote({ ...note, text, tagIds: [...selected] });
+      let savedId = await db.putNote({ ...note, text, tagIds: [...selected] });
+      // Saved under Vocabulary: the note gets (or joins) its word.
+      if (note.quote && [...selected].some(id => tags.find(t => t.id === id)?.builtin === 'vocab')) {
+        if (!note.wordId) {
+          const { linkNote } = await import('./words.js');
+          await linkNote({ ...note, id: savedId, text, tagIds: [...selected] });
+        }
+      }
       closeOverlay();
       // onSaved may return a message to show instead (e.g. "this note stays visible…").
       const msg = await onSaved?.({ ...note, id: savedId, text, tagIds: [...selected] }, isNew);
@@ -561,6 +570,12 @@ function noteCardHtml(note, tagsById, { link = null, where = '', chapter = '', i
 export async function openNoteCard(noteId, ctx) {
   const [note, tags] = await Promise.all([db.getNote(noteId), db.getAllTags()]);
   if (!note) return;
+  if (note.wordId) {
+    // A vocabulary note opens its word: meanings, your notes and every place you met it.
+    const { openWordCard } = await import('./words.js');
+    openWordCard(note.wordId, { fromNote: note, onChanged: ctx.onChanged });
+    return;
+  }
   const tagsById = byId(tags);
   // From the Notes tab there's a "Go to" button; in the reader you're already there.
   const goTo = ctx.inNotesTab
@@ -784,6 +799,7 @@ export async function renderNotes(app, navHtml, coverHtml = () => '', openSeries
     <div class="row-head">
       <a class="icon-btn notes-back" href="#/" data-back aria-label="Back">${I.back}</a>
       <h1 class="page-title">Notes</h1>
+      <a class="chip notes-words" href="#/words">${I.book || ''} Words</a>
       <button type="button" class="icon-btn" data-nt="search" aria-label="Search notes" aria-expanded="${st.searchOpen}">${I.search}</button>
       <button type="button" class="icon-btn" data-nt="tags" aria-label="Manage tags">${I.tag}</button>
     </div>
@@ -1116,7 +1132,7 @@ export async function openTagManager(onChanged, focusSeriesId = null) {
       ${openId === t.id ? paletteHtml(t.color, `data-for="${t.id}"`,
         new Set(tags.filter(x => x.id !== t.id && ((x.seriesId ?? null) === (t.seriesId ?? null) || x.seriesId == null)).map(x => x.color))) : ''}
       ${menuId === t.id ? `<div class="tag-actions">
-        <button type="button" class="btn${confirmId === t.id ? ' is-confirm' : ''}" data-del="${t.id}">${I.trashSm}${confirmId === t.id ? 'Tap again to delete' : 'Delete'}</button>
+        ${t.builtin ? '' : `<button type="button" class="btn${confirmId === t.id ? ' is-confirm' : ''}" data-del="${t.id}">${I.trashSm}${confirmId === t.id ? 'Tap again to delete' : 'Delete'}</button>`}
       </div>` : ''}
     </div>`;
 
@@ -1239,10 +1255,12 @@ export async function openTagManager(onChanged, focusSeriesId = null) {
 
 /** The Tags tab on a series page: this series' tags, with new / edit / delete. */
 export async function renderTagsTab(root, seriesId) {
+  await vocabularyTag(seriesId); // every series has its built-in Vocabulary tag
   const [tags, allNotes] = await Promise.all([db.getAllTags(), db.getAllNotes()]);
-  const own = tagsFor(tags, seriesId).own.sort((a, b) => (a.order ?? a.id) - (b.order ?? b.id));
+  const own = tagsFor(tags, seriesId).own.sort((a, b) => (b.builtin === 'vocab') - (a.builtin === 'vocab') || (a.order ?? a.id) - (b.order ?? b.id));
   const counts = new Map();
   for (const n of allNotes) if (n.seriesId === seriesId) for (const id of n.tagIds || []) counts.set(id, (counts.get(id) || 0) + 1);
+  const wordCount = new Set(allNotes.filter(n => n.seriesId === seriesId && n.wordId).map(n => n.wordId)).size;
   const free = TAG_COLORS.length - new Set(own.map(t => t.color)).size;
   const redraw = () => renderTagsTab(root, seriesId);
 
@@ -1251,8 +1269,8 @@ export async function renderTagsTab(root, seriesId) {
     <div class="tags-list">
       ${own.map(t => `<button type="button" class="tags-row" data-tag-edit="${t.id}">
         <span class="dot" style="background:${tagColor(t.color)}"></span>
-        <span class="txt"><b>${esc(t.name)}</b><small>${plural(counts.get(t.id) || 0, 'note')}</small></span>
-        ${I.pencilSm}</button>`).join('') || '<div class="empty" style="padding:24px 8px"><span>No tags yet. Make the ones this series needs — e.g. Characters, Plot, Vocabulary.</span></div>'}
+        <span class="txt"><b>${esc(t.name)}</b><small>${t.builtin === 'vocab' ? `Built in · ${plural(wordCount, 'word')} here · shared by all series` : plural(counts.get(t.id) || 0, 'note')}</small></span>
+        ${t.builtin === 'vocab' ? `<span class="tag-fixed">${svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', 12, 2)}fixed</span>` : I.pencilSm}</button>`).join('') || '<div class="empty" style="padding:24px 8px"><span>No tags yet. Make the ones this series needs — e.g. Characters, Plot, Vocabulary.</span></div>'}
     </div>
     <button type="button" class="tags-new" data-tag-new>${I.plus} New tag</button>
   </div>`;
@@ -1273,7 +1291,18 @@ async function openTagEditor(seriesId, tag, counts, onDone) {
   const series = await db.getSeries(seriesId);
   const n = tag ? counts.get(tag.id) || 0 : 0;
 
-  const html = () => `
+  const builtin = tag?.builtin === 'vocab';
+  let met = tag?.metColor || 'teal';
+  const html = () => builtin ? `
+    <h2>Vocabulary</h2>
+    <p class="hint" style="margin:0">Built in: every series has it, and it can’t be renamed or deleted. Words are shared by all series.</p>
+    <div class="field"><p class="tag-group-head"><b>Colour</b><span>where you saved a word</span></p>${paletteHtml(color, '', used)}</div>
+    <div class="field"><p class="tag-group-head"><b>“Met again” colour</b><span>dotted line on saved words in other places</span></p>${paletteHtml(met, '', new Set()).replace(/data-color=/g, 'data-met=')}</div>
+    <button type="button" class="btn" data-te="words">${I.book || ''} Open the words of ${esc(series?.name || 'this series')}</button>
+    <div class="two-btns">
+      <button type="button" class="btn" data-te="cancel">Cancel</button>
+      <button type="button" class="btn btn-accent" data-te="save">Save</button>
+    </div>` : `
     <h2>${tag ? 'Edit tag' : 'New tag'}</h2>
     <label class="field"><span class="label" style="padding:0">Name</span>
       <input class="text-input" id="tag-name" type="text" maxlength="30" value="${esc(tag?.name || '')}" placeholder="e.g. Characters" autocomplete="off"></label>
@@ -1292,16 +1321,31 @@ async function openTagEditor(seriesId, tag, counts, onDone) {
     const draw = () => {
       const name = box.querySelector('#tag-name')?.value;
       box.innerHTML = html();
-      if (name != null) box.querySelector('#tag-name').value = name;
+      if (name != null && box.querySelector('#tag-name')) box.querySelector('#tag-name').value = name;
     };
     draw();
-    if (!tag) box.querySelector('#tag-name').focus();
+    if (!tag) box.querySelector('#tag-name')?.focus();
     box.addEventListener('click', async e => {
       const sw = e.target.closest('[data-color]');
       if (sw) { color = sw.dataset.color; draw(); return; }
+      const mt = e.target.closest('[data-met]');
+      if (mt) { met = mt.dataset.met; draw(); return; }
       const b = e.target.closest('[data-te]');
       if (!b) return;
       if (b.dataset.te === 'cancel') { closeOverlay(); return; }
+      if (b.dataset.te === 'words') {
+        const { showSeriesWords } = await import('./words.js');
+        showSeriesWords(seriesId);
+        closeOverlay({ navTo: '#/words' });
+        return;
+      }
+      if (builtin) {
+        await db.updateTag(tag.id, { color, metColor: met });
+        toast('Vocabulary colours saved');
+        closeOverlay();
+        onDone?.();
+        return;
+      }
       if (b.dataset.te === 'delete') {
         closeOverlay();
         await trashTag(tag, { onUndone: onDone });
@@ -1367,7 +1411,7 @@ let visTab = 'notes';
  * codex (optional): { rooms: [{ id, name, color, icon (svg), count }], hidden: () => Set, setHidden(Set), off: bool }
  *   — a second tab with one switch per Codex room.
  */
-export async function openVisibility({ seriesId, noteList, onChange, codex = null }) {
+export async function openVisibility({ seriesId, noteList, onChange, codex = null, met = null }) {
   const tags = tagsFor(await db.getAllTags(), seriesId).own.sort((a, b) => (a.order ?? a.id) - (b.order ?? b.id));
   const inText = noteList.filter(n => n.sp != null);
   const count = id => inText.filter(n => (id === 'hl' ? !n.tagIds?.length : n.tagIds?.includes(id))).length;
@@ -1380,7 +1424,9 @@ export async function openVisibility({ seriesId, noteList, onChange, codex = nul
     const h = hiddenIn(seriesId);
     const sub = key => `${plural(count(key === 'hl' ? 'hl' : Number(key)), 'note')} in this chapter`;
     return `<div class="vis-list">
-        ${tags.map(t => row('data-vis', String(t.id), `<i class="vis-dot" style="background:${tagColor(t.color)}"></i>`, t.name, sub(String(t.id)), !h.tags.has(t.id))).join('')}
+        ${tags.map(t => row('data-vis', String(t.id), `<i class="vis-dot" style="background:${tagColor(t.color)}"></i>`, t.name, sub(String(t.id)), !h.tags.has(t.id))
+          + (t.builtin === 'vocab' && met ? row('data-met', 'met', `<i class="vis-met" style="border-color:${met.color}"></i>`, 'Saved words met again',
+            `${met.count ? `${plural(met.count, 'word')} in this chapter` : 'none in this chapter'} · dotted line`, met.on()) : '')).join('')}
         ${row('data-vis', 'hl', '<i class="vis-dot is-hl"></i>', tags.length ? 'Highlights & untagged' : 'All notes and highlights', sub('hl'), !h.highlights)}
       </div>
       <p class="hint tip" style="margin:0">Remembered for this series. Hidden notes are still there — this only clears the text. A note you add under a hidden tag stays visible until you switch that tag again.</p>`;
@@ -1404,6 +1450,12 @@ export async function openVisibility({ seriesId, noteList, onChange, codex = nul
     const box = sheet.querySelector('.vis-box');
     box.innerHTML = html();
     box.addEventListener('change', e => {
+      if (e.target.dataset.met != null) {
+        met.set(e.target.checked);
+        box.innerHTML = html();
+        onChange?.();
+        return;
+      }
       const room = e.target.dataset.room;
       if (room != null) {
         const h = codex.hidden();

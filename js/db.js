@@ -23,7 +23,7 @@
 import { nameKey } from './parser.js';
 
 const DB_NAME = 'reader-app';
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 let dbPromise = null;
 
 function req(r) {
@@ -77,6 +77,11 @@ export function openDB() {
       }
       if (event.oldVersion < 8) {
         db.createObjectStore('trash', { keyPath: 'id', autoIncrement: true });
+      }
+      if (event.oldVersion < 9) {
+        // Vocabulary words, shared by all series: { word, forms, meanings, mine, keys, ... }.
+        // Vocabulary notes point to their word with note.wordId.
+        db.createObjectStore('words', { keyPath: 'id', autoIncrement: true });
       }
     };
     open.onsuccess = () => resolve(open.result);
@@ -421,6 +426,17 @@ export const deleteNotes = ids => withTx(['notes'], 'readwrite', async s => { fo
 /** Put a tag back exactly as it was (same id). */
 export const putTag = tag => withTx(['tags'], 'readwrite', s => req(s.tags.put(tag)));
 
+// ---------- Vocabulary words (shared by all series) ----------
+export const getAllWords = () => withTx(['words'], 'readonly', s => req(s.words.getAll()));
+export const getWord = id => withTx(['words'], 'readonly', s => req(s.words.get(id)));
+export async function putWord(word) {
+  const now = Date.now();
+  const rec = { createdAt: now, ...word, updatedAt: now };
+  const id = await withTx(['words'], 'readwrite', s => req(s.words.put(rec)));
+  return { ...rec, id };
+}
+export const deleteWord = id => withTx(['words'], 'readwrite', s => req(s.words.delete(id)));
+
 // ---------- Trash (deleted notes, tags, Codex entries and values; restorable) ----------
 export const addTrash = item => withTx(['trash'], 'readwrite', s => req(s.trash.add({ at: Date.now(), ...item })));
 export const getTrash = id => withTx(['trash'], 'readonly', s => req(s.trash.get(id)));
@@ -429,7 +445,7 @@ export const deleteTrash = id => withTx(['trash'], 'readwrite', s => req(s.trash
 export const clearTrash = () => withTx(['trash'], 'readwrite', s => req(s.trash.clear()));
 
 // ---------- Whole library (backup & restore) ----------
-const ALL_STORES = ['series', 'chapters', 'texts', 'progress', 'covers', 'tags', 'notes', 'codex'];
+const ALL_STORES = ['series', 'chapters', 'texts', 'progress', 'covers', 'tags', 'notes', 'codex', 'words'];
 
 /** Read every record of every store, in one consistent snapshot. */
 export const exportAll = () => withTx(ALL_STORES, 'readonly', async s => {

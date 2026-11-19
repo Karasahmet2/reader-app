@@ -52,6 +52,7 @@ export async function trashNotes(notes, { onUndone } = {}) {
 
 /** Delete a tag (it comes off its notes) into the Trash. */
 export async function trashTag(tag, { onUndone } = {}) {
+  if (tag.builtin) { toast('Vocabulary is built in and can’t be deleted'); return; }
   const noteIds = (await db.getAllNotes()).filter(n => n.tagIds?.includes(tag.id)).map(n => n.id);
   const id = await db.addTrash({
     kind: 'tag', cat: 'tags', seriesId: tag.seriesId ?? null,
@@ -61,6 +62,20 @@ export async function trashTag(tag, { onUndone } = {}) {
   });
   await db.deleteTag(tag.id);
   offerUndo(`Tag “${tag.name}” moved to Trash`, id, onUndone);
+}
+
+/** Delete a vocabulary word and all the places you saved it into the Trash. */
+export async function trashWord(word, { onUndone } = {}) {
+  const notes = (await db.getAllNotes()).filter(n => n.wordId === word.id);
+  const id = await db.addTrash({
+    kind: 'word', cat: 'notes', seriesId: null,
+    title: `“${word.word}”`,
+    sub: `Vocabulary word · ${plural(notes.length, 'place')}`,
+    payload: { word, notes },
+  });
+  await db.deleteNotes(notes.map(n => n.id));
+  await db.deleteWord(word.id);
+  offerUndo(`“${word.word}” moved to Trash`, id, onUndone);
 }
 
 /** Delete a Codex entry (and the links to it) into the Trash. */
@@ -120,7 +135,10 @@ export async function restore(trashId) {
   const item = await db.getTrash(trashId);
   if (!item) return false;
   const p = item.payload;
-  if (item.kind === 'notes') {
+  if (item.kind === 'word') {
+    await db.putWord(p.word);
+    for (const n of p.notes) await db.putNote(n);
+  } else if (item.kind === 'notes') {
     for (const n of p.notes) await db.putNote(n);
   } else if (item.kind === 'tag') {
     await db.putTag(p.tag);
@@ -171,6 +189,7 @@ export async function purge(days) {
 
 const ICON = {
   notes: '<path d="M5 4h14v12l-4 4H5z"/><path d="M15 20v-4h4"/>',
+  word: '<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>',
   tag: '<path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.2"/>',
   entry: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/>',
   values: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',

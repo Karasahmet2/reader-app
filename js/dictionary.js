@@ -752,9 +752,17 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
     const b = e.target.closest('[data-def]');
     if (!b) return;
     const act = b.dataset.def;
-    if (act === 'note') onNote(picks.size ? picksText() : info() ? noteText(info()) : '');
+    if (act === 'note') {
+      const i = info();
+      const meanings = picks.size
+        ? [...picks.values()].map(p => ({ pos: p.pos, text: p.text, example: p.withEx ? p.example : '', src: p.src }))
+        : (i ? i.parts.slice(0, 2).map(([pos, defs]) => ({ pos, text: defs[0].text, example: '', src: srcOf() })) : []);
+      onNote(picks.size ? picksText() : i ? noteText(i) : '', {
+        headword: i?.word || word, meanings, audio: i?.audio || '', text: picks.size ? picksText() : i ? noteText(i) : '',
+      });
+    }
     else if (act === 'clear') { picks.clear(); render(); }
-    else if (act === 'find') onFind(word);
+    else if (act === 'find') onFind?.(word);
     else if (act === 'codex') onCodex?.(word);
     else if (act === 'copy') {
       try {

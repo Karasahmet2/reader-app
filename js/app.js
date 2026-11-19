@@ -23,6 +23,7 @@ import * as sounds from './sounds.js';
 import * as dictionary from './dictionary.js';
 import * as codex from './codex.js';
 import * as trash from './trash.js';
+import * as words from './words.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -228,6 +229,7 @@ async function route() {
     else if (view === 'sounds') await sounds.renderSoundsPage(app, nav('sounds'));
     else if (view === 'settings') await renderSettings();
     else if (view === 'backup') await renderBackup();
+    else if (view === 'words') await words.renderWordsPage(app);
     else if (view === 'trash') await trash.renderTrashPage(app, { days: settings.trashDays ?? 30, onDays: d => { settings = { ...settings, trashDays: d }; saveSettings(settings); } });
     else await renderLibrary();
     window.scrollTo(0, view === 'read' ? window.scrollY : (restoreY ?? (keepScroll ? y : 0)));
@@ -885,6 +887,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   const where = `${series.name} · Ch. ${n}`;
   let cxEntries = [];
   let cxSchema = null;
+  let metCount = 0;
   let chapterNoteList = [];
   /** After saving a note: if its tags are switched off, keep it visible for now and say so. */
   async function afterNoteSaved(saved, isNew) {
@@ -902,6 +905,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     // Only what you knew by this chapter (re-reading Ch. 5 hides what you learned in Ch. 9).
     cxEntries = schema ? codex.knownAt(entries, schema, chapter.number) : [];
     cxSchema = schema;
+    words.clearWords(textEl);
     codex.clearNames(textEl);
     chapterNoteList = list;
     notes.clearMarks(textEl);
@@ -911,7 +915,15 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     // Codex names get a dotted underline (after the note marks, which use text positions);
     // rooms switched off under "Show in text" are left out.
     if (schema) codex.applyNames(paras, cxEntries.filter(e => !offRooms.has(e.type)), schema);
+    // Saved words met again: every form of every saved word, in the "met again" colour.
+    const vtag = tags.find(t => t.seriesId === series.id && t.builtin === 'vocab');
+    textEl.style.setProperty('--wd-met', words.metColor(vtag));
+    const saved = await db.getAllWords();
+    // When the dots are off, still count them (on copies) for the eye panel.
+    metCount = words.applyWords(words.metHidden(series.id) ? paras.map(p => p.cloneNode(true)) : paras, saved);
+    document.querySelector('.vis-btn')?.classList.toggle('is-filtered', notes.anyHidden(series.id) || offRooms.size > 0 || words.metHidden(series.id));
   }
+
   function jumpTo(noteId) {
     const marks = textEl.querySelectorAll(`mark[data-note="${noteId}"]`);
     if (!marks.length) { toast('Couldn’t find that note’s text in this chapter'); return; }
@@ -1058,6 +1070,8 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     if (sel && !sel.isCollapsed) return;
     const mark = e.target.closest('mark.note-mark');
     const name = e.target.closest('span.cx-name');
+    const met = e.target.closest('span.wd-met');
+    if (met && !name) { words.openWordCard(Number(met.dataset.word), { onChanged: refreshNotes }); return; }
     if (name) {
       codex.openPeek(Number(name.dataset.entry), {
         asOf: chapter.number,
@@ -1113,7 +1127,10 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
           setHidden: set => codex.setHiddenRooms(series.id, set),
         };
       }
-      notes.openVisibility({ seriesId: series.id, noteList: chapterNoteList, onChange: refreshNotes, codex: cx });
+      notes.openVisibility({
+        seriesId: series.id, noteList: chapterNoteList, onChange: refreshNotes, codex: cx,
+        met: { count: metCount, color: getComputedStyle(textEl).getPropertyValue('--wd-met') || 'teal', on: () => !words.metHidden(series.id), set: on => words.setMetHidden(series.id, !on) },
+      });
     },
     openCodex: () => codex.openReaderCodex({ seriesId: series.id, chapterText: paras.map(p => p.textContent).join('\n'), asOf: chapter.number, onChanged: refreshNotes }),
     relock: () => (settings.keepAwake ? lockScreen() : unlockScreen()),
@@ -1158,10 +1175,10 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     } else if (action === 'define') {
       dictionary.openDefine({
         text: sel.quote,
-        onNote: async text => {
+        onNote: async (text, found) => {
+          if (found) { words.openSaveWord({ note: { ...draft }, where, found, onSaved: afterNoteSaved }); return; }
           const vocab = text ? await notes.vocabularyTag(series.id) : null;
-          const tagIds = vocab ? [vocab.id] : [];
-          notes.openNoteEditor({ note: { ...draft, text, tagIds }, where, onSaved: afterNoteSaved });
+          notes.openNoteEditor({ note: { ...draft, text, tagIds: vocab ? [vocab.id] : [] }, where, onSaved: afterNoteSaved });
         },
         onFind: w => find.openFind({ term: w || dictionary.cleanWord(sel.quote), chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch }),
         onCodex: () => codex.openEntryEditor({
@@ -2072,5 +2089,6 @@ notes.migrateTagColors()
     saveSettings(settings);
   })
   .then(() => trash.purge(settings.trashDays ?? 30).catch(() => {}))
+  .then(() => words.migrate().catch(err => console.error('words', err))) // Update 15: Vocabulary as words
   .catch(err => console.warn('Tags not updated', err))
   .finally(route);
