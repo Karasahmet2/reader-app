@@ -6,15 +6,20 @@ import { esc, fmtNum, plural, I, svg, openSheet, closeOverlay } from './ui.js';
 
 const MAX_SHOWN = 300; // results listed per scope (counts are always complete)
 
+/** "regard|regards" → "regard / regards" for showing. */
+export const showTerm = t => String(t).split('|').filter(Boolean).join(' / ');
+
 /** Same text the reader shows: _inner thoughts_ lose their underscores. */
 export const plainText = p => p.replace(/(^|[^\w])_([^_\n]+?)_(?!\w)/g, '$1$2');
 
 /** A case-insensitive pattern; "whole word" won't match inside longer words. */
 export function makePattern(term, wholeWord) {
-  const body = term.trim().replace(/\s+/g, ' ').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
+  // "regard|regards|regarded" = any of these (a saved word with its forms), longest first.
+  const one = t => t.trim().replace(/\s+/g, ' ').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
+  const body = [...new Set(String(term).split('|').map(one).filter(Boolean))].sort((a, b) => b.length - a.length).join('|');
   if (!body) return null;
   return wholeWord
-    ? new RegExp(`(?<![\\p{L}\\p{N}])${body}(?![\\p{L}\\p{N}])`, 'giu')
+    ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${body})(?![\\p{L}\\p{N}])`, 'giu')
     : new RegExp(body, 'giu');
 }
 
@@ -38,15 +43,16 @@ function snippet(text, start, end) {
  * Open the Find panel.
  *  term:      starting search text
  *  chapterId, seriesId: where you are (for the "This chapter" / "This series" tabs)
+ *  forms:     a saved word's forms — find all of them (until you change the search)
  *  onJumpHere(para, nth, term, wholeWord): jump inside the open chapter (reader only)
  */
-export async function openFind({ term, chapterId, seriesId, onJumpHere = null }) {
+export async function openFind({ term, forms = null, chapterId, seriesId, onJumpHere = null }) {
   const [chapters, seriesList] = await Promise.all([db.getAllChapters(), db.getAllSeries()]);
   const chapterById = new Map(chapters.map(c => [c.id, c]));
   const seriesById = new Map(seriesList.map(s => [s.id, s]));
 
   const state = {
-    term: term.trim().slice(0, 80),
+    term: forms?.length > 1 ? forms.join('|') : term.trim().slice(0, 80),
     whole: true,
     scope: 'chapter',
     hits: { chapter: [], series: [], all: [] },
@@ -59,8 +65,9 @@ export async function openFind({ term, chapterId, seriesId, onJumpHere = null })
     <h2>Find uses</h2>
     <label class="search-box" style="margin-top:0">${I.search}
       <span class="visually-hidden">Find</span>
-      <input id="find-term" type="search" value="${esc(state.term)}" autocomplete="off" placeholder="Word, name or phrase">
+      <input id="find-term" type="search" value="${esc(term.trim().slice(0, 80))}" autocomplete="off" placeholder="Word, name or phrase">
     </label>
+    ${forms?.length > 1 ? `<p class="find-forms">${I.searchSm || ''}<span>All forms: <b>${esc(forms.join(', '))}</b></span></p>` : ''}
     <div class="find-opts">
       <div class="segmented find-scopes" role="tablist" aria-label="Where to look"></div>
       <button type="button" class="find-whole" aria-pressed="true">Whole word</button>
@@ -84,7 +91,7 @@ export async function openFind({ term, chapterId, seriesId, onJumpHere = null })
     const hits = state.hits[state.scope];
     const total = state.counts[state.scope];
     if (!total) {
-      results.innerHTML = `<p class="hint">No uses of “${esc(state.term)}” ${
+      results.innerHTML = `<p class="hint">No uses of “${esc(showTerm(state.term))}” ${
         { chapter: 'in this chapter', series: 'in this series', all: 'in your library' }[state.scope]}.${
         state.whole ? ' Try turning off “Whole word” to catch other forms.' : ''}</p>`;
       return;
@@ -161,7 +168,7 @@ export async function openFind({ term, chapterId, seriesId, onJumpHere = null })
   let typing;
   input.addEventListener('input', () => {
     clearTimeout(typing);
-    typing = setTimeout(() => { state.term = input.value; search(); }, 350);
+    typing = setTimeout(() => { state.term = input.value; sheet.querySelector('.find-forms')?.remove(); search(); }, 350);
   });
   wholeBtn.addEventListener('click', () => {
     state.whole = !state.whole;
@@ -295,11 +302,11 @@ export function showStepper({ paras, term, whole, para, nth, onMove }) {
   const el = document.createElement('div');
   el.className = 'find-stepper';
   el.setAttribute('role', 'toolbar');
-  el.setAttribute('aria-label', `Uses of ${term}`);
+  el.setAttribute('aria-label', `Uses of ${showTerm(term)}`);
   const draw = () => {
     el.innerHTML = `
       <button type="button" data-step="-1" aria-label="Previous use"${list.length < 2 ? ' disabled' : ''}>${svg('<path d="M6 15l6-6 6 6"/>', 20, 2)}</button>
-      <span><b>“${esc(term)}”</b> · ${i + 1} of ${list.length}</span>
+      <span><b>“${esc(showTerm(term))}”</b> · ${i + 1} of ${list.length}</span>
       <button type="button" data-step="1" aria-label="Next use"${list.length < 2 ? ' disabled' : ''}>${svg('<path d="M6 9l6 6 6-6"/>', 20, 2)}</button>
       <button type="button" data-step="0" aria-label="Close" class="is-close">${svg('<path d="M6 6l12 12M18 6L6 18"/>', 18, 2)}</button>`;
   };

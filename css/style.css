@@ -2226,15 +2226,9 @@ mark.note-mark.is-note[data-depth="2"] { text-underline-offset: 15px; }
 .wd-forms .chip { height: 32px; }
 .wd-tabs i { display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle; border-radius: 3px; background: var(--accent); }
 .wd-mine { min-height: 130px; }
-.wd-places { display: flex; flex-direction: column; gap: 8px; }
-.wd-place-list { display: flex; flex-direction: column; background: var(--bg); border-radius: 14px; overflow: hidden; }
-.wd-place { min-height: 50px; display: flex; align-items: center; gap: 10px; padding: 6px 14px; color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.45; }
-.wd-place + .wd-place { border-top: 1px solid var(--surface); }
-.wd-place span { flex: 1; min-width: 0; }
-.wd-place small { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.wd-place.is-here { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.wd-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.wd-actions .btn { height: 44px; font-size: 13px; gap: 6px; }
+.wd-icons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.wd-icon { height: 52px; display: flex; align-items: center; justify-content: center; background: var(--surface-2); border: 0; border-radius: 16px; color: var(--strong); }
+.wd-icon:active { background: var(--surface-3); }
 .wd-remove { color: var(--danger); background: none; }
 .we-forms { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; background: var(--bg); border: 1.5px solid var(--surface-3); border-radius: 14px; }
 .we-forms .chip { height: 34px; }
@@ -2271,3 +2265,10 @@ span.wd-met { text-decoration: underline dotted var(--wd-met, #4fc8b8); text-dec
 .wr-top small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wr-top em { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .wr-mean { font-size: 13px; line-height: 1.45; color: var(--text); }
+
+/* ---------- Update 16.1: Define changes a saved word, Find all forms ---------- */
+.def-saved { margin-left: 6px; padding: 1px 7px; background: var(--line); border-radius: 8px; font-size: 11px; font-style: normal; color: var(--accent); white-space: nowrap; }
+.def-from { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
+.def-elsewhere { padding: 10px 6px; background: var(--bg); border-radius: 14px; }
+.find-forms { display: flex; align-items: center; gap: 8px; margin: 0 2px; font-size: 13px; color: var(--muted); }
+.find-forms b { font-weight: 500; color: var(--strong); }

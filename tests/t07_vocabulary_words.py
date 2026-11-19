@@ -78,13 +78,14 @@ async def main():
         note = await ev("import('./js/db.js').then(d => d.getAllNotes()).then(l => l.find(n => n.quote === 'slipped'))")
         assert note['wordId'] == slip['id']
 
-        # 5 word card: Dictionary first, My notes, places
+        # 5 word card: Dictionary first, My notes, four icons (no places list)
         await ev("localStorage.removeItem('reader-word-tab')")
         await page.evaluate("document.querySelector('mark.note-mark[data-word]').click()")
         await page.wait_for_selector('.wd-card')
         card = (await page.inner_text('.wd-card')).replace('\n', ' | ')
         print('5 word card:', card[:240])
-        assert 'Dictionary' in card and 'where you met it' in card.lower()
+        assert 'Dictionary' in card and 'where you met it' not in card.lower()
+        assert await page.eval_on_selector_all('.wd-icons .wd-icon', 'e => e.map(x => x.dataset.wc)') == ['edit', 'find', 'define', 'attach']
         await page.screenshot(path=f'{SH}/u17-card.png')
         await page.click('[data-wtab="mine"]'); await page.wait_for_selector('.wd-mine')
         print('  my notes:', await page.input_value('.wd-mine'))

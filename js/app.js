@@ -1078,7 +1078,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     const mark = e.target.closest('mark.note-mark');
     const name = e.target.closest('span.cx-name');
     const met = e.target.closest('span.wd-met');
-    if (met && !name) { words.openWordCard(Number(met.dataset.word), { onChanged: refreshNotes }); return; }
+    if (met && !name) { words.openWordCard(Number(met.dataset.word), { onChanged: refreshNotes, find: { chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch } }); return; }
     if (name) {
       codex.openPeek(Number(name.dataset.entry), {
         asOf: chapter.number,

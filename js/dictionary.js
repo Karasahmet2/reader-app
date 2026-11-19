@@ -494,8 +494,15 @@ function preferredTab() {
  *  onNote(text): open the note editor (text: definition to fill in, or '' for none)
  *  onFind(word): open Find uses for the word
  *  onCodex(word): add the word to the Codex (optional)
+ *  saved + onUpdate(meanings): change a saved word's meanings — saved ones start ticked,
+ *    untick to remove, tick others to add (from the word card)
  */
-export function openDefine({ text, onNote, onFind, onCodex }) {
+export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpdate = null }) {
+  const editing = Array.isArray(saved) && !!onUpdate;
+  const keep = (saved || []).map(() => true);
+  const normT = t => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const savedIdx = t => (editing ? saved.findIndex(m => normT(m.text) === normT(t)) : -1);
+  const family = src => (String(src).startsWith('mw') ? 'mw' : src);
   let word = cleanWord(text);
   let tab = preferredTab();
   let results = {};   // tab → result for the current word
@@ -525,7 +532,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       const r = results[k];
       b.setAttribute('aria-selected', String(k === tab));
       const sub = k === 'mw' ? MW_NAMES[(r?.status === 'ok' && r.ref) || mwRef] : TABS[k][1];
-      const n = picksIn(k);
+      const n = picksIn(k) + (editing ? saved.filter((m, i) => keep[i] && family(m.src) === k).length : 0);
       b.querySelector('small').textContent = n ? `${n} ticked` : !r ? sub
         : r.status === 'nokey' ? 'add keys' : r.status === 'none' ? 'not found'
           : r.status === 'offline' ? 'no connection' : r.fallback ? 'offline pack' : sub;
@@ -552,6 +559,26 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
     for (const p of picks.values()) by[SRC_NAME[p.src]] = (by[SRC_NAME[p.src]] || 0) + 1;
     const from = Object.entries(by).map(([n, c]) => `${c} from ${n}`).join(' · ');
     return `<span class="def-save"><b>${I.note} Save ${plural(picks.size, 'meaning')}</b><small>${Object.keys(by).length > 1 ? from : `from ${Object.keys(by)[0]}`}</small></span>`;
+  };
+
+  /* Changing a saved word: meanings not shown in this tab, and the Update button. */
+  const shownSaved = res => {
+    const set = new Set();
+    if (res?.status === 'ok') res.info.parts.forEach(([, defs]) => defs.forEach(d => { const i = savedIdx(d.text); if (i >= 0) set.add(i); }));
+    return set;
+  };
+  const SRC_LONG = { wiki: 'Wiktionary', pack: 'WordNet', 'mw:learners': 'Webster', 'mw:collegiate': 'Webster', note: 'your note' };
+  const editBlock = res => {
+    if (!editing) return '';
+    const shown = shownSaved(res);
+    const rest = saved.map((m, i) => [m, i]).filter(([, i]) => !shown.has(i));
+    const added = picks.size;
+    const removed = keep.filter(k => !k).length;
+    return `${rest.length ? `<section class="def-part def-elsewhere"><h3>Saved from elsewhere</h3><ol>${rest.map(([m, i]) => `
+      <li class="def-sense${keep[i] ? ' is-picked' : ''}" data-keep="${i}" role="button" tabindex="0" aria-pressed="${keep[i]}">
+        <span class="def-box" aria-hidden="true">${keep[i] ? I.checkSm : ''}</span>
+        <span class="def-body"><span>${esc(m.pos)} — ${esc(m.text)}</span><small class="def-from">${esc(SRC_LONG[m.src] || '')}</small></span></li>`).join('')}</ol></section>` : ''}
+      <button type="button" class="btn btn-accent def-save-btn" data-def="update"><span class="def-save"><b>Update meanings</b><small>+${added} new · ${removed} removed</small></span></button>`;
   };
 
   const openIn = () => `<div class="def-open"><span>Open in</span>
@@ -608,10 +635,11 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       const i = res.info;
       const base = i.note ? `<span class="def-base">${esc(i.note)}</span>`
         : i.word.toLowerCase() !== word ? `<span class="def-base">Base form of “${esc(word)}”</span>` : '';
+      const editing_sub = editing ? '<span class="def-base">Changing the meanings of your saved word</span>' : '';
       box.innerHTML = `
         <div class="def-head">
           <div class="def-title"><h2>${esc(i.word)}</h2>
-            ${i.phonetic ? `<span class="def-sub">${esc(i.phonetic)}</span>` : ''}${base}</div>
+            ${i.phonetic ? `<span class="def-sub">${esc(i.phonetic)}</span>` : ''}${base}${editing_sub}</div>
           ${i.audio ? `<button type="button" class="def-audio" data-def="audio" aria-label="Play pronunciation">${SPEAK}</button>` : ''}
         </div>
         ${mwSwitch(res)}
@@ -622,22 +650,24 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
             <ol>${defs.map((d, di) => {
               const key = `${srcOf()}|${pi}|${di}`;
               const p = picks.get(key);
-              return `<li class="def-sense${p ? ' is-picked' : ''}" data-pick="${esc(key)}" data-pos="${esc(pos)}" role="button" tabindex="0" aria-pressed="${!!p}">
-                <span class="def-box" aria-hidden="true">${p ? I.checkSm : ''}</span>
-                <span class="def-body"><span>${esc(d.text)}</span>${d.example ? `<em>“${esc(d.example)}”</em>` : ''}${d.sub ? `<span class="def-subsense">${esc(d.sub)}</span>` : ''}
+              const si = savedIdx(d.text);
+              const on = si >= 0 ? keep[si] : !!p;
+              return `<li class="def-sense${on ? ' is-picked' : ''}" ${si >= 0 ? `data-keep="${si}"` : `data-pick="${esc(key)}"`} data-pos="${esc(pos)}" role="button" tabindex="0" aria-pressed="${on}">
+                <span class="def-box" aria-hidden="true">${on ? I.checkSm : ''}</span>
+                <span class="def-body"><span>${esc(d.text)}${si >= 0 ? ' <small class="def-saved">saved</small>' : ''}</span>${d.example ? `<em>“${esc(d.example)}”</em>` : ''}${d.sub ? `<span class="def-subsense">${esc(d.sub)}</span>` : ''}
                 ${p && d.example ? `<button type="button" class="def-exsw" data-pickex="${esc(key)}" role="switch" aria-checked="${p.withEx}"><i aria-hidden="true"></i>Include example</button>` : ''}</span></li>`;
             }).join('')}</ol>
           </section>`).join('')}
         ${chips('Similar words', i.synonyms)}
         ${chips('Forms', i.forms)}
         <div class="def-actions">
-          <button type="button" class="btn btn-accent def-save-btn" data-def="note">${saveLabel()}</button>
+          ${editing ? editBlock(res) : `<button type="button" class="btn btn-accent def-save-btn" data-def="note">${saveLabel()}</button>`}
           <div class="two-btns">
             <button type="button" class="btn" data-def="find">${I.searchSm} Find uses</button>
             ${picks.size ? `<button type="button" class="btn" data-def="clear">${svg('<path d="M6 6l12 12M18 6L6 18"/>', 16, 2)} Clear ticks</button>`
               : `<button type="button" class="btn" data-def="copy">${I.copy} Copy</button>`}
           </div>
-          <p class="hint tip def-pick-tip">Tap meanings to tick the ones you want to save — from any tab. Nothing ticked saves the first meanings.</p>
+          <p class="hint tip def-pick-tip">${editing ? 'Your saved meanings are ticked. Untick to remove, tick others to add — from any tab.' : 'Tap meanings to tick the ones you want to save — from any tab. Nothing ticked saves the first meanings.'}</p>
         </div>
         ${openIn()}
         ${footer(res)}`;
@@ -648,6 +678,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
         <div class="def-head"><div class="def-title"><h2>${esc(word)}</h2></div></div>
         <div class="def-key">${KEY}<span>Add your free keys in <b>Settings → Dictionary</b> to use Merriam-Webster.</span></div>
         ${otherHint() || `<div class="def-other"><span>Wiktionary works without keys.</span><button type="button" data-tab="wiki">Show it</button></div>`}
+        ${editBlock(res)}
         ${openIn()}`;
       return;
     }
@@ -658,7 +689,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
         ${otherHint()}
         ${chips('Did you mean', res.suggestions)}
         <p class="def-msg">Web-novel terms and names often aren’t in normal dictionaries.</p>
-        ${missingActions}
+        ${editing ? editBlock(res) : missingActions}
         ${openIn()}`;
       return;
     }
@@ -667,7 +698,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       <p class="def-msg">This word hasn’t been looked up in ${TABS[tab][0]} before, so it needs internet once.
         Tip: the <b>Offline</b> tab (Settings → Dictionary → Download) works without internet.</p>
       ${otherHint()}
-      ${missingActions}`;
+      ${editing ? editBlock(res) : missingActions}`;
   }
 
   async function load(t) {
@@ -705,7 +736,7 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
 
   // Meanings are ticked with Enter / Space too.
   sheet.addEventListener('keydown', e => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-pick]')) { e.preventDefault(); e.target.click(); }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-pick], [data-keep]')) { e.preventDefault(); e.target.click(); }
   });
   sheet.addEventListener('click', async e => {
     const t = e.target.closest('[data-tab]');
@@ -732,6 +763,15 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
       if (p) { p.withEx = !p.withEx; render(); }
       return;
     }
+    const kp = e.target.closest('[data-keep]');
+    if (kp) {
+      const i = Number(kp.dataset.keep);
+      keep[i] = !keep[i];
+      const y = sheet.scrollTop;
+      render();
+      sheet.scrollTop = y;
+      return;
+    }
     const pk = e.target.closest('[data-pick]');
     if (pk) {
       const key = pk.dataset.pick;
@@ -752,6 +792,12 @@ export function openDefine({ text, onNote, onFind, onCodex }) {
     const b = e.target.closest('[data-def]');
     if (!b) return;
     const act = b.dataset.def;
+    if (act === 'update') {
+      const meanings = [...saved.filter((m, i) => keep[i]),
+        ...[...picks.values()].map(p => ({ pos: p.pos, text: p.text, example: p.withEx ? p.example : '', src: p.src }))];
+      onUpdate(meanings);
+      return;
+    }
     if (act === 'note') {
       const i = info();
       const meanings = picks.size

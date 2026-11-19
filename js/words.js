@@ -40,7 +40,7 @@ export async function migrate() {
   for (const s of await db.getAllSeries()) await vocabTag(s.id);
   const vocabIds = new Set((await db.getAllTags()).filter(t => t.builtin === 'vocab').map(t => t.id));
   const todo = (await db.getAllNotes()).filter(n => !n.wordId && n.quote && (n.tagIds || []).some(id => vocabIds.has(id)));
-  if (!todo.length) return 0;
+  if (!todo.length) { await syncAll(); return 0; }
   const words = await db.getAllWords();
   for (const n of todo.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))) {
     const base = cleanQuote(n.quote);
@@ -49,15 +49,25 @@ export async function migrate() {
     let w = words.find(x => allForms(x).includes(base));
     if (w) {
       w = mergeInto(w, { meanings: parsed.meanings, mine: parsed.mine });
-      w = await db.putWord(w);
+      w = await saveWord(w);
       words[words.findIndex(x => x.id === w.id)] = w;
     } else {
-      w = await db.putWord({ word: base, forms: [], meanings: parsed.meanings, mine: parsed.mine, keys: [base], createdAt: n.createdAt || Date.now() });
+      w = await saveWord({ word: base, forms: [], meanings: parsed.meanings, mine: parsed.mine, keys: [base], createdAt: n.createdAt || Date.now() });
       words.push(w);
     }
     await db.putNote({ ...n, wordId: w.id });
   }
+  await syncAll();
   return todo.length;
+}
+
+/** Every vocabulary note shows its word's current meanings and notes. */
+async function syncAll() {
+  const words = new Map((await db.getAllWords()).map(w => [w.id, w]));
+  for (const n of await db.getAllNotes()) {
+    const w = n.wordId && words.get(n.wordId);
+    if (w && n.text !== wordText(w)) await db.putNote({ ...n, text: wordText(w) });
+  }
 }
 
 /** "verb — to look at closely" lines (with optional “example” lines under them) → meanings;
@@ -74,6 +84,26 @@ export function parseNoteText(text) {
     else if (line.trim()) mine.push(line);
   }
   return { meanings, mine: mine.join('\n').trim() };
+}
+
+/** The text a vocabulary note shows: the word's meanings, then your own notes.
+ *  Notes always show the word as it is now, so a meaning edited anywhere is the same everywhere. */
+export function wordText(w) {
+  const lines = (w.meanings || []).map(m => `${m.pos} — ${m.text}${m.example ? `\n   “${m.example}”` : ''}`);
+  return [lines.join('\n'), (w.mine || '').trim()].filter(Boolean).join('\n\n');
+}
+async function syncNotes(w) {
+  if (!w?.id) return;
+  const text = wordText(w);
+  for (const n of await db.getAllNotes()) {
+    if (n.wordId === w.id && n.text !== text) await db.putNote({ ...n, text });
+  }
+}
+/** Save a word and bring its notes up to date. */
+async function saveWord(w) {
+  const rec = await db.putWord(w);
+  await syncNotes(rec);
+  return rec;
 }
 
 /** Add meanings / forms / notes to a word (no duplicates). */
@@ -129,8 +159,8 @@ export async function openSaveWord({ note, where, found, onSaved }) {
     } else {
       w = mergeInto({ word: base, forms: [], meanings: [], keys: [] }, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword, base], audio: found.audio });
     }
-    w = await db.putWord(w);
-    const n = { ...note, text: found.text || '', tagIds: [...new Set([...(note.tagIds || []), tag.id])], wordId: w.id };
+    w = await saveWord(w);
+    const n = { ...note, text: wordText(w), tagIds: [...new Set([...(note.tagIds || []), tag.id])], wordId: w.id };
     const id = await db.putNote(n);
     closeOverlay();
     const msg = await onSaved?.({ ...n, id }, true);
@@ -173,9 +203,9 @@ export async function linkNote(note) {
   if (!quote) return note;
   const parsed = parseNoteText(note.text || '');
   let w = sameWord(words, { headword: quote, quote });
-  w = await db.putWord(w ? mergeInto(w, { meanings: parsed.meanings, mine: parsed.mine })
+  w = await saveWord(w ? mergeInto(w, { meanings: parsed.meanings, mine: parsed.mine })
     : { word: quote, forms: [], meanings: parsed.meanings, mine: parsed.mine, keys: [quote] });
-  const n = { ...note, wordId: w.id };
+  const n = { ...note, wordId: w.id, text: wordText(w) };
   await db.putNote(n);
   return n;
 }
@@ -185,27 +215,18 @@ export async function linkNote(note) {
 const TAB_KEY = 'reader-word-tab';
 const abbr = name => (/^\S+$/.test(name) ? name : name.split(/\s+/).map(x => x[0]).join('').toUpperCase().slice(0, 4));
 
-async function placesOf(wordId) {
-  const list = (await db.getAllNotes()).filter(n => n.wordId === wordId);
-  const series = new Map((await db.getAllSeries()).map(s => [s.id, s]));
-  const out = [];
-  for (const n of list) {
-    const ch = await db.getChapter(n.chapterId);
-    out.push({ note: n, series: series.get(n.seriesId), num: ch?.number ?? 0 });
-  }
-  return out.sort((a, b) => (a.series?.name || '').localeCompare(b.series?.name || '') || a.num - b.num);
-}
 
 /**
  * The word card: forms, Dictionary / My notes, and every place you met it.
  *  fromNote: the note you tapped (gives "Remove this spot"), onChanged: redraw the page behind
  */
-export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) {
+const FORMS_ICON = svg('<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M8.2 6H12a4 4 0 0 1 4 3"/>', 22);
+
+export async function openWordCard(wordId, { fromNote = null, onChanged, find = {} } = {}) {
   let w = await db.getWord(wordId);
   if (!w) { toast('That word is no longer saved'); return; }
   let tab = 'dict';
   try { tab = localStorage.getItem(TAB_KEY) || 'dict'; } catch { /* default */ }
-  let places = await placesOf(wordId);
 
   const html = () => `<div class="wd-card">
     <div class="wd-head"><div class="txt"><h2>${esc(w.word)}</h2><small>Vocabulary · all series</small></div>
@@ -220,14 +241,11 @@ export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) 
         : `<p class="hint" style="margin:0">No dictionary meanings saved yet.</p>`)
       : `<textarea class="text-area wd-mine" rows="5" placeholder="Your own words, a memory hook, how the story uses it…">${esc(w.mine || '')}</textarea>
          <p class="hint tip" style="margin:0">Saved as you type. Kept apart from the dictionary text.</p>`}
-    <section class="wd-places"><p class="label" style="padding:0;margin:0">Where you met it · ${places.length}</p>
-      <div class="wd-place-list">${places.map(p => `<a class="wd-place${fromNote?.id === p.note.id ? ' is-here' : ''}" href="#/read/${p.note.chapterId}/note/${p.note.id}">
-        <span>${esc(short(p.note.quote || '', 70))}</span><small>${esc(p.series ? abbr(p.series.name) : '?')} · Ch. ${fmtNum(p.num)}</small></a>`).join('')
-        || '<p class="hint" style="margin:0">No places yet.</p>'}</div></section>
-    <div class="wd-actions">
-      <button type="button" class="btn" data-wc="edit">${I.pencilSm} Edit</button>
-      <button type="button" class="btn" data-wc="define">${I.book || ''} Define</button>
-      <button type="button" class="btn" data-wc="attach">Attach…</button>
+    <div class="wd-icons">
+      <button type="button" class="wd-icon" data-wc="edit" aria-label="Forms of the word" title="Forms">${FORMS_ICON}</button>
+      <button type="button" class="wd-icon" data-wc="find" aria-label="Find every use (all forms)" title="Find">${svg('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>', 22)}</button>
+      <button type="button" class="wd-icon" data-wc="define" aria-label="Define: change the saved meanings" title="Define">${svg('<path d="M5 4.5h11a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11M9 8.5h6"/>', 22)}</button>
+      <button type="button" class="wd-icon" data-wc="attach" aria-label="Attach to another word" title="Attach">${svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', 22)}</button>
     </div>
     ${fromNote ? `<button type="button" class="btn wd-remove" data-wc="remove">${I.trashSm} Remove this spot</button>` : ''}
   </div>`;
@@ -240,37 +258,44 @@ export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) 
     sheet.onReturn = async () => {
       const fresh = await db.getWord(wordId);
       if (!fresh) { closeOverlay(); return; }
-      w = fresh; places = await placesOf(wordId); draw();
+      w = fresh; draw();
     };
     let saveTimer = null;
     box.addEventListener('input', e => {
       if (!e.target.matches('.wd-mine')) return;
       w.mine = e.target.value;
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(async () => { w = await db.putWord(w); }, 400);
+      saveTimer = setTimeout(async () => { w = await saveWord(w); }, 400);
     });
     box.addEventListener('click', async e => {
       const t = e.target.closest('[data-wtab]');
       if (t) {
-        if (saveTimer) { clearTimeout(saveTimer); w = await db.putWord(w); }
+        if (saveTimer) { clearTimeout(saveTimer); w = await saveWord(w); }
         tab = t.dataset.wtab;
         try { localStorage.setItem(TAB_KEY, tab); } catch { /* fine */ }
         draw();
         return;
       }
-      const a = e.target.closest('a.wd-place');
-      if (a) { e.preventDefault(); closeOverlay({ navTo: a.getAttribute('href') }); return; }
       const b = e.target.closest('[data-wc]');
       if (!b) return;
       const act = b.dataset.wc;
       if (act === 'say') new Audio(w.audio).play().catch(() => toast('Couldn’t play the sound'));
       if (act === 'edit') openEditWord(w.id, { onChanged });
       if (act === 'attach') openAttach(w.id, { onChanged });
-      if (act === 'define') openDefine({ text: w.word, onNote: async (t, found) => {
-        if (found) await addMeanings(wordId, found);
-        closeSheet();
-        onChanged?.();
-      } });
+      if (act === 'find') {
+        const { openFind } = await import('./find.js');
+        openFind({ term: w.word, forms: allForms(w), chapterId: find.chapterId ?? null, seriesId: find.seriesId ?? null, onJumpHere: find.onJumpHere || null });
+      }
+      if (act === 'define') openDefine({
+        text: w.word,
+        saved: w.meanings || [],
+        onUpdate: async meanings => {
+          w = await saveWord({ ...(await db.getWord(wordId)), meanings });
+          closeSheet();
+          toast('Meanings updated');
+          onChanged?.();
+        },
+      });
       if (act === 'remove') {
         closeOverlay();
         const { trashNotes } = await import('./trash.js');
@@ -285,7 +310,7 @@ export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) 
 export async function addMeanings(wordId, found) {
   const w = await db.getWord(wordId);
   if (!w) return;
-  await db.putWord(mergeInto(w, { meanings: found.meanings, keys: [found.headword], audio: found.audio }));
+  await saveWord(mergeInto(w, { meanings: found.meanings, keys: [found.headword], audio: found.audio }));
   toast(`Meanings added to “${w.word}”`);
 }
 
@@ -300,7 +325,7 @@ export async function openEditWord(wordId, { onChanged } = {}) {
   const merged = w.mergedFrom || [];
   const suggest = () => quotes.filter(q => q && q !== norm(w.word) && !forms.includes(q));
 
-  const html = () => `<h2>Edit “${esc(w.word)}”</h2>
+  const html = () => `<h2>Forms of “${esc(w.word)}”</h2>
     <label class="field"><span class="label" style="padding:0">Word (base form)</span>
       <input class="text-input" id="we-base" value="${esc(w.word)}" autocomplete="off"></label>
     <div class="field"><span class="label" style="padding:0">Other forms</span>
@@ -364,7 +389,7 @@ export async function openEditWord(wordId, { onChanged } = {}) {
       const others = (await db.getAllWords()).filter(x => x.id !== w.id);
       const clash = others.find(x => allForms(x).includes(nb));
       if (clash) { toast(`“${nb}” is already saved as “${clash.word}” — use Attach to join them`); return; }
-      await db.putWord({ ...w, word: nb, forms: forms.filter(f => f !== nb) });
+      await saveWord({ ...w, word: nb, forms: forms.filter(f => f !== nb) });
       closeSheet();
       toast('Word saved');
       onChanged?.();
@@ -394,7 +419,7 @@ export async function openAttach(wordId, { onChanged } = {}) {
   openSheet(`<h2>Attach “${esc(w.word)}” to…</h2>
     <label class="search-box">${I.search}<input id="at-q" type="search" placeholder="Search your words" autocomplete="off"></label>
     <div class="wd-pick-list">${rows()}</div>
-    <p class="hint tip" style="margin:0">For words the dictionary didn’t connect. Attaching joins them: places, forms and meanings come together, and “${esc(w.word)}” becomes a form. You can detach it again from Edit.</p>`, sheet => {
+    <p class="hint tip" style="margin:0">For words the dictionary didn’t connect. Attaching joins them: places, forms and meanings come together, and “${esc(w.word)}” becomes a form. You can detach it again from Forms.</p>`, sheet => {
     sheet.querySelector('#at-q').addEventListener('input', e => { q = e.target.value; sheet.querySelector('.wd-pick-list').innerHTML = rows(); });
     sheet.addEventListener('click', async e => {
       const b = e.target.closest('[data-at]');
@@ -418,11 +443,12 @@ export async function merge(fromId, toId) {
     addedForms: next.forms.filter(f => !before.forms.includes(f)),
     addedMeanings: next.meanings.slice(before.meanings).map(m => m.text),
   }];
-  next = await db.putWord(next);
+  next = await saveWord(next);
   for (const id of noteIds) {
     const n = await db.getNote(id);
     if (n) await db.putNote({ ...n, wordId: toId });
   }
+  await syncNotes(next);
   await db.deleteWord(fromId);
   return next;
 }
@@ -432,12 +458,13 @@ export async function detach(toId, index) {
   const to = await db.getWord(toId);
   const rec = to?.mergedFrom?.[index];
   if (!rec) return;
-  await db.putWord(rec.word);
+  await saveWord(rec.word);
   for (const id of rec.noteIds) {
     const n = await db.getNote(id);
     if (n && n.wordId === toId) await db.putNote({ ...n, wordId: rec.word.id });
   }
-  await db.putWord({
+  await syncNotes(rec.word);
+  await saveWord({
     ...to,
     forms: (to.forms || []).filter(f => !rec.addedForms.includes(f)),
     meanings: (to.meanings || []).filter(m => !rec.addedMeanings.includes(m.text)),
@@ -547,7 +574,7 @@ export async function renderWordsPage(app) {
       <button type="button" class="chip words-series" data-wl="series">${esc(current ? current.name : 'All series')} ▾</button>
     </div>
     <label class="search-box">${I.search}<input id="wl-q" type="search" placeholder="Search words and forms" value="${esc(wordQuery)}" autocomplete="off"></label>
-    <div class="chip-row words-sort">${[['az', 'A–Z'], ['recent', 'Recently saved'], ['met', 'Most met']].map(([k, l]) => `<button type="button" class="chip${view.sort === k ? ' is-on' : ''}" data-ws="${k}" aria-pressed="${view.sort === k}">${l}</button>`).join('')}</div>
+    <div class="chip-row words-sort">${[['az', 'A–Z'], ['recent', 'Recently saved'], ['met', 'Most saved']].map(([k, l]) => `<button type="button" class="chip${view.sort === k ? ' is-on' : ''}" data-ws="${k}" aria-pressed="${view.sort === k}">${l}</button>`).join('')}</div>
     <div class="list-meta"><span id="wl-count"></span></div>
     <div class="words-list"></div>
   </main>`;

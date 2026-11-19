@@ -571,9 +571,10 @@ export async function openNoteCard(noteId, ctx) {
   const [note, tags] = await Promise.all([db.getNote(noteId), db.getAllTags()]);
   if (!note) return;
   if (note.wordId) {
-    // A vocabulary note opens its word: meanings, your notes and every place you met it.
+    // A vocabulary note opens its word: meanings, your notes, forms.
     const { openWordCard } = await import('./words.js');
-    openWordCard(note.wordId, { fromNote: note, onChanged: ctx.onChanged });
+    openWordCard(note.wordId, { fromNote: note, onChanged: ctx.onChanged,
+      find: { chapterId: ctx.chapter?.id ?? note.chapterId, seriesId: ctx.series?.id ?? note.seriesId, onJumpHere: ctx.onFindJump || null } });
     return;
   }
   const tagsById = byId(tags);

@@ -202,6 +202,19 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 16 — Word card refinements (mockups v16.1)
+
+- **Four icons** on the word card: Forms · Find · Define · Attach (long-press or screen reader
+  gives their names). "Where you met it" is gone — Find shows every use, in every form.
+- **Find** from the word card searches the word and all its saved forms at once
+  ("All forms: regard, regards, regarded"). Typing a new search drops the forms.
+- **Define from the word card** opens with your saved meanings already ticked and marked
+  "saved". Meanings saved from another tab (or an older note) are under "Saved from elsewhere".
+  Tick to add, untick to remove, then **Update meanings · +N new · M removed**.
+- **One meaning everywhere**: every vocabulary note shows its word's current meanings and
+  My notes — change them once and the Notes lists, series Notes tab and backups all follow.
+- The edit sheet is now **Forms of "word"**; the words list sort is **Most saved**.
+
 ## Update 15.1 — Back steps through sheets
 
 - **Sheets opened from sheets** now sit on top of each other: the phone's back gesture (and Cancel)
@@ -374,7 +387,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v23` → `reader-v24`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v24` → `reader-v25`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.
