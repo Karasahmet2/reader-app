@@ -202,6 +202,16 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 15.1 — Back steps through sheets
+
+- **Sheets opened from sheets** now sit on top of each other: the phone's back gesture (and Cancel)
+  returns to the sheet you came from instead of closing everything. For example word card → Edit →
+  back = the word card again (showing your changes); note card → Edit → Cancel = the note card;
+  series ⋯ → Rename → back = the menu. Finishing an action (Save, Delete…) still closes them all.
+- Edit / Define / Attach from the word card return to the card when you save.
+- An old link to a deleted series or chapter now says so plainly instead of "Something went wrong".
+- New test `t08_walkthrough` walks every page, sheet and back route.
+
 ## Update 15 — Vocabulary as words
 
 - **Vocabulary is built in**: every series has a Vocabulary tag, always first; it can't be renamed
@@ -364,7 +374,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v22` → `reader-v23`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v23` → `reader-v24`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

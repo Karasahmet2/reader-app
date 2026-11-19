@@ -202,7 +202,21 @@ let overlay = null;
 
 export const isOverlayOpen = () => !!overlay;
 
-export function openOverlay(elements) {
+export function openOverlay(elements, { stack = true } = {}) {
+  if (overlay && stack) {
+    // A sheet opened from a sheet sits on top of it: back (or Cancel) returns to the one below.
+    const below = overlay.elements;
+    below.forEach(el => el.remove());
+    overlay.elements = elements;
+    document.body.append(...elements);
+    pushOverlayStep(() => {
+      overlay.elements.forEach(el => el.remove());
+      overlay.elements = below;
+      document.body.append(...below);
+      below.forEach(el => el.onReturn?.());
+    });
+    return;
+  }
   if (overlay) {
     overlay.elements.forEach(el => el.remove());
     overlay.elements = elements;
@@ -251,7 +265,14 @@ window.addEventListener('popstate', () => {
   else closeOverlay({ fromPop: true });
 });
 
-export function openSheet(html, onMount) {
+/** Leave this sheet: back to the sheet below it if there is one, else close. */
+export function closeSheet() {
+  if (overlay?.steps.length) history.back();
+  else closeOverlay();
+}
+
+/** opts.replace: take the place of an open sheet instead of stacking on it. */
+export function openSheet(html, onMount, { replace = false } = {}) {
   const backdrop = document.createElement('div');
   backdrop.className = 'sheet-backdrop';
   backdrop.addEventListener('click', () => closeOverlay());
@@ -260,7 +281,7 @@ export function openSheet(html, onMount) {
   sheet.setAttribute('role', 'dialog');
   sheet.setAttribute('aria-modal', 'true');
   sheet.innerHTML = `<div class="grabber" aria-hidden="true"></div>${html}`;
-  openOverlay([backdrop, sheet]);
+  openOverlay([backdrop, sheet], { stack: !replace });
   onMount?.(sheet);
   return sheet;
 }

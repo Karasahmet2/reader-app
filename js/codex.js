@@ -16,7 +16,7 @@
 //     fields[linkField] = [{ id, label?, since }]              (older entries: ids or { id, label })
 
 import * as db from './db.js';
-import { esc, I, svg, plural, fmtNum, toast, openSheet, closeOverlay, goBack, pushOverlayStep, popOverlayStep, trailInfo, enterPageMode, exitPageMode, inPageMode, onLongPress } from './ui.js';
+import { esc, I, svg, plural, fmtNum, toast, openSheet, closeOverlay, closeSheet, goBack, pushOverlayStep, popOverlayStep, trailInfo, enterPageMode, exitPageMode, inPageMode, onLongPress } from './ui.js';
 import { tagColor, TAG_COLORS } from './notes.js';
 import { openFind } from './find.js';
 import { trashEntry, trashValues, recordValues } from './trash.js';
@@ -1428,7 +1428,7 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       if (act === 'change') { v.changing = true; v.q = ''; draw('[data-pick-q]'); }
       if (act === 'still') { v.w.until = null; draw(); }
       if (act === 'ended') { v.w.until = v.w.until ?? Math.max(v.w.since || nums[0], changeAt); draw(); }
-      if (act === 'cancel') { if (v.direct) closeOverlay(); else popView(); }
+      if (act === 'cancel') { if (v.direct) closeSheet(); else popView(); }
       if (act === 'remove') {
         draft.fields[v.fid] = linkValues(draft, v.fid).filter((_, i) => i !== v.i)
           .map(x => (x.until == null ? { id: x.id, label: x.label, since: x.since } : x));
@@ -1445,7 +1445,7 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
       const b = e.target.closest('[data-vw]');
       if (!b) return;
       const act = b.dataset.vw;
-      if (act === 'cancel') { if (v.direct) closeOverlay(); else popView(); }
+      if (act === 'cancel') { if (v.direct) closeSheet(); else popView(); }
       if (act === 'remove') {
         draft.fields[v.fid] = textValues(draft, v.fid).filter(x => x.since !== v.orig);
         if (v.direct) await saveEntry(); else popView();
@@ -1493,7 +1493,7 @@ export async function openEntryEditor({ seriesId, entry = null, name = '', type 
     }
     const act = e.target.closest('[data-ed]');
     if (!act) return;
-    if (act.dataset.ed === 'cancel') { closeOverlay(); return; }
+    if (act.dataset.ed === 'cancel') { closeSheet(); return; }
     if (act.dataset.ed === 'delete') {
       closeOverlay();
       await trashEntry(entry, typeIn(schema, entry).name);

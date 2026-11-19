@@ -13,7 +13,7 @@ import {
   loadSettings, saveSettings, applySettings,
 } from './settings.js';
 import {
-  esc, fmtNum, plural, I, toast, openOverlay, closeOverlay, openSheet, isOverlayOpen,
+  esc, fmtNum, plural, I, toast, openOverlay, closeOverlay, closeSheet, openSheet, isOverlayOpen,
   trackRoute, replaceHash, goBack, goUp,
 } from './ui.js';
 import * as notes from './notes.js';
@@ -234,10 +234,17 @@ async function route() {
     else await renderLibrary();
     window.scrollTo(0, view === 'read' ? window.scrollY : (restoreY ?? (keepScroll ? y : 0)));
   } catch (err) {
-    console.error(err);
-    app.innerHTML = `<main class="page"><div class="empty">
-      <strong>Something went wrong</strong><span>${esc(err.message)}</span>
-      <a class="btn" href="#/">Back to library</a></div></main>`;
+    if (err.missing) {
+      // An old link or bookmark to something deleted: say so plainly.
+      app.innerHTML = `<main class="page"><div class="empty">
+        <strong>${esc(err.message)}</strong><span>It was deleted, or this link is from before.</span>
+        <a class="btn" href="#/" data-up>Back to library</a></div></main>`;
+    } else {
+      console.error(err);
+      app.innerHTML = `<main class="page"><div class="empty">
+        <strong>Something went wrong</strong><span>${esc(err.message)}</span>
+        <a class="btn" href="#/" data-up>Back to library</a></div></main>`;
+    }
   }
 }
 
@@ -480,7 +487,7 @@ function openSortSheet() {
 async function renderSeries(id, tab = 'chapters') {
   if (!['chapters', 'notes', 'tags', 'codex'].includes(tab)) tab = 'chapters';
   const series = await db.getSeries(id);
-  if (!series) throw new Error('This series no longer exists.');
+  if (!series) throw Object.assign(new Error('This series no longer exists.'), { missing: true });
   currentSeries = series;
   const [chapters, progress, allNotes, entries, allTags] = await Promise.all([
     db.getChaptersOfSeries(id), db.getAllProgress(), db.getAllNotes(), db.getCodexOfSeries(id), db.getAllTags()]);
@@ -724,7 +731,7 @@ function openMergeSheet(name, other) {
     sheet.addEventListener('click', async e => {
       const b = e.target.closest('[data-m]');
       if (!b) return;
-      if (b.dataset.m === 'cancel') { closeOverlay(); return; }
+      if (b.dataset.m === 'cancel') { closeSheet(); return; }
       const r = await db.renameSeries(s.id, name, true);
       setCoverUrl(s.id, null);
       coversLoaded = false;
@@ -749,7 +756,7 @@ function openDeleteSheet() {
     sheet.addEventListener('click', async e => {
       const b = e.target.closest('[data-d]');
       if (!b) return;
-      if (b.dataset.d === 'cancel') { closeOverlay(); return; }
+      if (b.dataset.d === 'cancel') { closeSheet(); return; }
       await db.deleteSeries(s.id);
       setCoverUrl(s.id, null);
       currentSeries = null;
@@ -787,7 +794,7 @@ function openJumpSheet() {
 
 async function renderReader(id, jumpNoteId = null, findJump = null) {
   const chapter = await db.getChapter(id);
-  if (!chapter) throw new Error('This chapter no longer exists.');
+  if (!chapter) throw Object.assign(new Error('This chapter no longer exists.'), { missing: true });
   const [series, paragraphs, siblings, saved] = await Promise.all([
     db.getSeries(chapter.seriesId), db.getText(id), db.getChaptersOfSeries(chapter.seriesId), db.getProgress(id),
   ]);
@@ -1923,7 +1930,7 @@ backupInput.addEventListener('change', async () => {
     sheet.addEventListener('click', async e => {
       const b = e.target.closest('[data-rb]');
       if (!b) return;
-      if (b.dataset.rb === 'cancel') { closeOverlay(); return; }
+      if (b.dataset.rb === 'cancel') { closeSheet(); return; }
       b.disabled = true;
       b.textContent = 'Restoring…';
       try {

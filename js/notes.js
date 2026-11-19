@@ -7,7 +7,7 @@
 
 import * as db from './db.js';
 import { TAG_PALETTE, OLD_TAG_COLORS } from './settings.js';
-import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, replaceHash, enterPageMode, exitPageMode, inPageMode, onLongPress } from './ui.js';
+import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, closeSheet, replaceHash, enterPageMode, exitPageMode, inPageMode, onLongPress } from './ui.js';
 import { openFind } from './find.js';
 import { trashNotes, trashTag } from './trash.js';
 import { isSingleWord } from './dictionary.js';
@@ -505,7 +505,7 @@ export async function openNoteEditor({ note, where, onSaved }) {
       if (e.target.closest('[data-addtag]')) { addTag(); return; }
       const act = e.target.closest('[data-ne]');
       if (!act) return;
-      if (act.dataset.ne === 'cancel') { closeOverlay(); return; }
+      if (act.dataset.ne === 'cancel') { closeSheet(); return; }
       const text = sheet.querySelector('#note-text').value.trim();
       if (!note.quote && !text) { toast('Write something first'); return; }
       let savedId = await db.putNote({ ...note, text, tagIds: [...selected] });
@@ -1332,7 +1332,7 @@ async function openTagEditor(seriesId, tag, counts, onDone) {
       if (mt) { met = mt.dataset.met; draw(); return; }
       const b = e.target.closest('[data-te]');
       if (!b) return;
-      if (b.dataset.te === 'cancel') { closeOverlay(); return; }
+      if (b.dataset.te === 'cancel') { closeSheet(); return; }
       if (b.dataset.te === 'words') {
         const { showSeriesWords } = await import('./words.js');
         showSeriesWords(seriesId);

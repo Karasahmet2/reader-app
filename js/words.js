@@ -7,7 +7,7 @@
 // === 'vocab') that can't be renamed or deleted.
 
 import * as db from './db.js';
-import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay } from './ui.js';
+import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, closeSheet } from './ui.js';
 import { tagColor } from './notes.js';
 import { openDefine } from './dictionary.js';
 
@@ -159,7 +159,7 @@ export async function openSaveWord({ note, where, found, onSaved }) {
       const b = e.target.closest('[data-wd]');
       if (!b) return;
       b.disabled = true;
-      if (b.dataset.wd === 'cancel') closeOverlay();
+      if (b.dataset.wd === 'cancel') closeSheet();
       else save(b.dataset.wd === 'add' ? match : null);
     });
   });
@@ -205,7 +205,7 @@ export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) 
   if (!w) { toast('That word is no longer saved'); return; }
   let tab = 'dict';
   try { tab = localStorage.getItem(TAB_KEY) || 'dict'; } catch { /* default */ }
-  const places = await placesOf(wordId);
+  let places = await placesOf(wordId);
 
   const html = () => `<div class="wd-card">
     <div class="wd-head"><div class="txt"><h2>${esc(w.word)}</h2><small>Vocabulary · all series</small></div>
@@ -236,6 +236,12 @@ export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) 
     const box = sheet.querySelector('.wd-box');
     const draw = () => { box.innerHTML = html(); };
     draw();
+    // Back from Forms / Define / Attach: show what changed there.
+    sheet.onReturn = async () => {
+      const fresh = await db.getWord(wordId);
+      if (!fresh) { closeOverlay(); return; }
+      w = fresh; places = await placesOf(wordId); draw();
+    };
     let saveTimer = null;
     box.addEventListener('input', e => {
       if (!e.target.matches('.wd-mine')) return;
@@ -260,7 +266,11 @@ export async function openWordCard(wordId, { fromNote = null, onChanged } = {}) 
       if (act === 'say') new Audio(w.audio).play().catch(() => toast('Couldn’t play the sound'));
       if (act === 'edit') openEditWord(w.id, { onChanged });
       if (act === 'attach') openAttach(w.id, { onChanged });
-      if (act === 'define') openDefine({ text: w.word, onNote: (t, found) => found && addMeanings(wordId, found).then(() => onChanged?.()) });
+      if (act === 'define') openDefine({ text: w.word, onNote: async (t, found) => {
+        if (found) await addMeanings(wordId, found);
+        closeSheet();
+        onChanged?.();
+      } });
       if (act === 'remove') {
         closeOverlay();
         const { trashNotes } = await import('./trash.js');
@@ -332,14 +342,14 @@ export async function openEditWord(wordId, { onChanged } = {}) {
       if (add) { addForm(add.dataset.weAdd); draw(); return; }
       const det = e.target.closest('[data-we-detach]');
       if (det) {
-        closeOverlay();
         await detach(w.id, Number(det.dataset.weDetach));
+        closeSheet();
         onChanged?.();
         return;
       }
       const b = e.target.closest('[data-we]');
       if (!b) return;
-      if (b.dataset.we === 'cancel') { closeOverlay(); return; }
+      if (b.dataset.we === 'cancel') { closeSheet(); return; }
       if (b.dataset.we === 'delete') {
         closeOverlay();
         const { trashWord } = await import('./trash.js');
@@ -355,7 +365,7 @@ export async function openEditWord(wordId, { onChanged } = {}) {
       const clash = others.find(x => allForms(x).includes(nb));
       if (clash) { toast(`“${nb}” is already saved as “${clash.word}” — use Attach to join them`); return; }
       await db.putWord({ ...w, word: nb, forms: forms.filter(f => f !== nb) });
-      closeOverlay();
+      closeSheet();
       toast('Word saved');
       onChanged?.();
     });
