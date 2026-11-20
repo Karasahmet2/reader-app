@@ -223,6 +223,8 @@ export function openOverlay(elements, { stack = true } = {}) {
   } else {
     history.pushState({ overlay: true }, '');
     overlay = { elements, steps: [] };
+    // The page behind stays still while something is open (keeps your reading place).
+    document.documentElement.classList.add('overlay-open');
   }
   document.body.append(...elements);
 }
@@ -245,6 +247,7 @@ export function closeOverlay({ fromPop = false, navTo = null } = {}) {
   const steps = fromPop ? 0 : overlay.steps.length;
   overlay.elements.forEach(el => el.remove());
   overlay = null;
+  document.documentElement.classList.remove('overlay-open');
   if (navTo) {
     const go = () => {
       if (location.hash === navTo || (navTo === '#/' && !location.hash)) history.back();
@@ -281,7 +284,70 @@ export function openSheet(html, onMount, { replace = false } = {}) {
   sheet.setAttribute('role', 'dialog');
   sheet.setAttribute('aria-modal', 'true');
   sheet.innerHTML = `<div class="grabber" aria-hidden="true"></div>${html}`;
+  backdrop.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+  dragToClose(sheet);
   openOverlay([backdrop, sheet], { stack: !replace });
   onMount?.(sheet);
   return sheet;
+}
+
+/** Pull a sheet down to close it: by the handle at the top, or anywhere once it's scrolled to the top.
+ *  Same as tapping outside it. */
+function dragToClose(sheet) {
+  let startY = 0, startX = 0, startT = 0, dy = 0, dragging = false, decided = false;
+  // Something inside the sheet that is scrolled down (a list) gets the gesture, not the sheet.
+  const innerScrolled = t => {
+    for (let el = t; el && el !== sheet; el = el.parentElement) if (el.scrollTop > 0) return true;
+    return sheet.scrollTop > 0;
+  };
+  const begin = (x, y) => { startX = x; startY = y; startT = performance.now(); dy = 0; dragging = false; decided = false; };
+  const move = (x, y, fromHandle) => {
+    const d = y - startY;
+    if (!decided) {
+      if (Math.abs(d) < 6 && Math.abs(x - startX) < 6) return false;
+      decided = true;
+      dragging = fromHandle || (d > 0 && Math.abs(d) > Math.abs(x - startX));
+      if (dragging) sheet.style.transition = 'none';
+    }
+    if (!dragging) return false;
+    dy = Math.max(0, d);
+    sheet.style.transform = `translateY(${dy}px)`;
+    return true;
+  };
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    const fast = dy / Math.max(1, performance.now() - startT) > 0.6;
+    sheet.style.transition = 'transform 0.18s ease';
+    if (dy > 90 || (fast && dy > 30)) {
+      sheet.style.transform = 'translateY(100%)';
+      setTimeout(() => { if (sheet.isConnected) closeOverlay(); }, 160);
+    } else {
+      sheet.style.transform = '';
+    }
+  };
+  // The handle: mouse or finger.
+  sheet.addEventListener('pointerdown', e => {
+    if (!e.target.closest('.grabber')) return;
+    e.target.closest('.grabber').setPointerCapture?.(e.pointerId);
+    begin(e.clientX, e.clientY);
+    const onMove = ev => move(ev.clientX, ev.clientY, true);
+    const onUp = () => { end(); sheet.removeEventListener('pointermove', onMove); };
+    sheet.addEventListener('pointermove', onMove);
+    sheet.addEventListener('pointerup', onUp, { once: true });
+    sheet.addEventListener('pointercancel', onUp, { once: true });
+  });
+  // Anywhere on the sheet with a finger, when it's already at the top.
+  let touchOk = false;
+  sheet.addEventListener('touchstart', e => {
+    touchOk = !e.target.closest('.grabber, input, textarea, [contenteditable]') && !innerScrolled(e.target) && e.touches.length === 1;
+    if (touchOk) begin(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener('touchmove', e => {
+    if (!touchOk) return;
+    if (move(e.touches[0].clientX, e.touches[0].clientY, false)) e.preventDefault();
+    else if (decided) touchOk = false;
+  }, { passive: false });
+  sheet.addEventListener('touchend', () => { if (touchOk) end(); touchOk = false; });
+  sheet.addEventListener('touchcancel', () => { if (touchOk) end(); touchOk = false; });
 }

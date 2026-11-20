@@ -202,6 +202,13 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 16.3 — Sheets hold the page still, and pull down to close
+
+- While a sheet or panel is open (word card, notes, Show in text, Define, sounds…), the chapter
+  behind it can't be scrolled any more, so your reading place stays where it was.
+- Close a sheet by pulling its handle down — or pull the sheet itself down when it's scrolled to
+  its top. A short pull springs back. Tapping outside still closes it too.
+
 ## Update 16.2 — Deleted words really go
 
 - Deleting a saved word's last spot (Remove this spot, Delete in Notes, select mode) now deletes
@@ -394,7 +401,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v25` → `reader-v26`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v26` → `reader-v27`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.
