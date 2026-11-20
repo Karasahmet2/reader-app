@@ -40,13 +40,23 @@ export async function trashNotes(notes, { onUndone } = {}) {
   if (!notes.length) return;
   const sid = notes[0].seriesId;
   const multi = new Set(notes.map(n => n.seriesId)).size > 1;
+  // A vocabulary word whose last saved spot goes goes with it (or it would stay dotted in the text).
+  const gone = new Set(notes.map(n => n.id));
+  const all = await db.getAllNotes();
+  const words = [];
+  for (const wid of new Set(notes.map(n => n.wordId).filter(Boolean))) {
+    if (all.some(n => n.wordId === wid && !gone.has(n.id))) continue;
+    const w = await db.getWord(wid);
+    if (w) words.push(w);
+  }
   const id = await db.addTrash({
     kind: 'notes', cat: 'notes', seriesId: multi ? null : sid,
     title: notes.length === 1 ? quoteOf(notes[0]) : plural(notes.length, 'note'),
     sub: multi ? 'Several series' : [await seriesName(sid), await chapterSpan(notes)].filter(Boolean).join(' · '),
-    payload: { notes },
+    payload: { notes, words },
   });
   await db.deleteNotes(notes.map(n => n.id));
+  for (const w of words) await db.deleteWord(w.id);
   offerUndo(`${notes.length === 1 ? 'Note' : plural(notes.length, 'note')} moved to Trash`, id, onUndone);
 }
 
@@ -76,6 +86,14 @@ export async function trashWord(word, { onUndone } = {}) {
   await db.deleteNotes(notes.map(n => n.id));
   await db.deleteWord(word.id);
   offerUndo(`“${word.word}” moved to Trash`, id, onUndone);
+}
+
+/** Words left with no saved spot (deleted before Update 16.2): quietly into the Trash. */
+export async function trashOrphanWords(words) {
+  for (const word of words) {
+    await db.addTrash({ kind: 'word', cat: 'notes', seriesId: null, title: `“${word.word}”`, sub: 'Vocabulary word · no places left', payload: { word, notes: [] } });
+    await db.deleteWord(word.id);
+  }
 }
 
 /** Delete a Codex entry (and the links to it) into the Trash. */
@@ -139,6 +157,7 @@ export async function restore(trashId) {
     await db.putWord(p.word);
     for (const n of p.notes) await db.putNote(n);
   } else if (item.kind === 'notes') {
+    for (const w of p.words || []) await db.putWord(w);
     for (const n of p.notes) await db.putNote(n);
   } else if (item.kind === 'tag') {
     await db.putTag(p.tag);

@@ -61,10 +61,17 @@ export async function migrate() {
   return todo.length;
 }
 
-/** Every vocabulary note shows its word's current meanings and notes. */
+/** Every vocabulary note shows its word's current meanings and notes; words with no spot left go. */
 async function syncAll() {
   const words = new Map((await db.getAllWords()).map(w => [w.id, w]));
-  for (const n of await db.getAllNotes()) {
+  const notes = await db.getAllNotes();
+  const used = new Set(notes.map(n => n.wordId).filter(Boolean));
+  const orphans = [...words.values()].filter(w => !used.has(w.id));
+  if (orphans.length) {
+    const { trashOrphanWords } = await import('./trash.js');
+    await trashOrphanWords(orphans);
+  }
+  for (const n of notes) {
     const w = n.wordId && words.get(n.wordId);
     if (w && n.text !== wordText(w)) await db.putNote({ ...n, text: wordText(w) });
   }

@@ -42,7 +42,7 @@ async def main():
         await page.wait_for_selector('.review .group'); await page.click('[data-review="import"]'); await page.wait_for_timeout(1500)
         await ev("""import('./js/db.js').then(async d => {
             const k = await d.putWord({ word: 'glass', forms: ['glasses'], meanings: [{ pos: 'noun', text: 'a hard clear material', src: 'pack' }], keys: ['glass','glasses'] });
-            const tags = await d.getAllTags();
+            await d.putNote({ seriesId: 2, chapterId: 4, sp: null, quote: 'glass', text: '', tagIds: [], wordId: k.id, createdAt: 0, updatedAt: 0 });
         })""")
         # fresh start, like opening the app from the home screen
         await page.goto(B + 'index.html'); await page.reload(); await page.wait_for_timeout(1200)

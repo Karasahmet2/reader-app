@@ -23,9 +23,11 @@ async def main():
             const ps = ['Winston Smith slipped quickly through the glass doors of Victory Mansions.', 'Outside, the Ministry of Truth towered over the grimy landscape.'];
             const so = ps[1].indexOf('grimy');
             await d.putNote({ seriesId: 1, chapterId: 1, sp: 1, so, ep: 1, eo: so + 5, quote: 'grimy', text: 'adjective — covered with dirt\\nI like this word', tagIds: [t.id], createdAt: 1, updatedAt: 1 });
-            await d.putWord({ word: 'slip', forms: [], meanings: [{ pos: 'verb', text: 'to slide', src: 'pack' }], keys: ['slip'] });
-            await d.putWord({ word: 'party', forms: [], meanings: [], keys: ['party'] });
-            const k1 = await d.putWord({ word: 'knock', forms: [], meanings: [{ pos: 'verb', text: 'to hit a door', src: 'pack' }], keys: ['knock'] });
+            // words saved somewhere else (a spot in another, unlisted book)
+            const away = async w => { const r = await d.putWord(w); await d.putNote({ seriesId: 99, chapterId: 99, sp: null, quote: w.word, text: '', tagIds: [], wordId: r.id, createdAt: 0, updatedAt: 0 }); return r; };
+            await away({ word: 'slip', forms: [], meanings: [{ pos: 'verb', text: 'to slide', src: 'pack' }], keys: ['slip'] });
+            await away({ word: 'party', forms: [], meanings: [], keys: ['party'] });
+            const k1 = await away({ word: 'knock', forms: [], meanings: [{ pos: 'verb', text: 'to hit a door', src: 'pack' }], keys: ['knock'] });
             const k2 = await d.putWord({ word: 'knocked', forms: [], meanings: [{ pos: 'verb', text: 'knocked about', src: 'pack' }], keys: ['knocked'] });
             await d.putNote({ seriesId: 1, chapterId: 3, sp: 0, so: 11, ep: 0, eo: 18, quote: 'knocked', text: '', tagIds: [t.id], wordId: k2.id, createdAt: 2, updatedAt: 2 });
             window.__k = [k1.id, k2.id];
