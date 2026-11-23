@@ -10,13 +10,14 @@ import * as db from './db.js';
 import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, closeSheet } from './ui.js';
 import { tagColor } from './notes.js';
 import { openDefine } from './dictionary.js';
+import { toXY, logPoint, describe, colorOf, daysLabel, diamondSvg } from './diamond.js';
 
 const norm = s => String(s || '').toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ').trim();
 /** A selection cleaned to a word: trims punctuation and a trailing 's. */
 export const cleanQuote = q => norm(q).replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/'s$/u, '');
-const allForms = w => [w.word, ...(w.forms || [])].map(norm).filter(Boolean);
+export const allForms = w => [w.word, ...(w.forms || [])].map(norm).filter(Boolean);
 const POS_ORDER = ['noun', 'verb', 'adjective', 'adverb'];
-const SRC_NAME = { 'mw:learners': 'Merriam-Webster Learner’s', 'mw:collegiate': 'Merriam-Webster Collegiate', wiki: 'Wiktionary', pack: 'WordNet', note: 'your earlier note' };
+export const SRC_NAME = { 'mw:learners': 'Merriam-Webster Learner’s', 'mw:collegiate': 'Merriam-Webster Collegiate', wiki: 'Wiktionary', pack: 'WordNet', note: 'your earlier note' };
 
 /* ------------------------------------------------------------------ built-in Vocabulary tag */
 
@@ -74,7 +75,8 @@ async function syncAll() {
   for (const n of notes) {
     const w = n.wordId && words.get(n.wordId);
     if (w && n.text !== wordText(w)) await db.putNote({ ...n, text: wordText(w) });
-  }
+  }  // Recordings of words saved before they were kept on the phone.
+  for (const w of words.values()) if (w.audio) keepAudio(w.audio);
 }
 
 /** "verb — to look at closely" lines (with optional “example” lines under them) → meanings;
@@ -107,21 +109,50 @@ async function syncNotes(w) {
   }
 }
 /** Save a word and bring its notes up to date. */
-async function saveWord(w) {
+export async function saveWord(w) {
   const rec = await db.putWord(w);
   await syncNotes(rec);
   return rec;
 }
 
 /** Add meanings / forms / notes to a word (no duplicates). */
-function mergeInto(w, { forms = [], meanings = [], mine = '', keys = [], audio = '' }) {
+function mergeInto(w, { forms = [], meanings = [], mine = '', keys = [], audio = '', phonetic = '' }) {
   const out = { ...w, forms: [...(w.forms || [])], meanings: [...(w.meanings || [])], keys: [...(w.keys || [])] };
   for (const f of forms.map(norm)) if (f && f !== norm(out.word) && !out.forms.includes(f)) out.forms.push(f);
   for (const m of meanings) if (!out.meanings.some(x => norm(x.text) === norm(m.text))) out.meanings.push(m);
   for (const k of keys.map(norm)) if (k && !out.keys.includes(k)) out.keys.push(k);
   if (mine && !(out.mine || '').includes(mine)) out.mine = [out.mine, mine].filter(Boolean).join('\n\n');
   if (audio && !out.audio) out.audio = audio;
+  if (phonetic && !out.phonetic) out.phonetic = phonetic;
   return out;
+}
+
+/* ---------- pronunciation ---------- */
+
+const AUDIO_CACHE = 'reader-audio';
+
+/** Keep a word's recording on the phone, so it plays without internet. */
+export async function keepAudio(url) {
+  if (!url || !('caches' in window)) return;
+  try {
+    const cache = await caches.open(AUDIO_CACHE);
+    if (await cache.match(url)) return;
+    await cache.put(url, await fetch(url, { mode: 'no-cors' }));
+  } catch { /* offline now: it plays online, and is kept next time */ }
+}
+
+/** Say a word: its saved recording, else the phone's own voice. */
+export function sayWord(w) {
+  const speak = () => {
+    if (!('speechSynthesis' in window)) { toast('No pronunciation for this word'); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(w.word);
+    u.lang = 'en-US';
+    u.rate = 0.9;
+    speechSynthesis.speak(u);
+  };
+  if (!w.audio) { speak(); return; }
+  new Audio(w.audio).play().catch(speak);
 }
 
 /** A saved word that is the same as this one: same dictionary headword, or the text is one of its forms. */
@@ -132,7 +163,7 @@ export function sameWord(words, { headword, quote }, exceptId = null) {
 
 /* ------------------------------------------------------------------ saving from Define */
 
-const groupHtml = meanings => {
+export const groupHtml = meanings => {
   const groups = [];
   for (const m of meanings) {
     let g = groups.find(x => x.pos === m.pos);
@@ -162,11 +193,12 @@ export async function openSaveWord({ note, where, found, onSaved }) {
     const mine = (document.querySelector('#wd-mine')?.value || '').trim();
     let w;
     if (target) {
-      w = mergeInto(target, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword], audio: found.audio });
+      w = mergeInto(target, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword], audio: found.audio, phonetic: found.phonetic });
     } else {
-      w = mergeInto({ word: base, forms: [], meanings: [], keys: [] }, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword, base], audio: found.audio });
+      w = mergeInto({ word: base, forms: [], meanings: [], keys: [] }, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword, base], audio: found.audio, phonetic: found.phonetic });
     }
     w = await saveWord(w);
+    keepAudio(w.audio);
     const n = { ...note, text: wordText(w), tagIds: [...new Set([...(note.tagIds || []), tag.id])], wordId: w.id };
     const id = await db.putNote(n);
     closeOverlay();
@@ -229,6 +261,34 @@ const abbr = name => (/^\S+$/.test(name) ? name : name.split(/\s+/).map(x => x[0
  */
 const FORMS_ICON = svg('<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M8.2 6H12a4 4 0 0 1 4 3"/>', 22);
 
+/** The word card's Progress tab: every review's spot on the diamond, in order. */
+function progressHtml(w) {
+  const log = (w.srs?.log || []).map(l => ({ l, p: logPoint(l) })).filter(x => x.p);
+  if (!log.length) return '<p class="hint" style="margin:0">Not reviewed yet. Practise it under Review — each review’s spot on the diamond is kept here.</p>';
+  const score = p => { const { x, y } = toXY(p.a, p.b); return x + y; };
+  const avg = list => list.reduce((s, x) => s + score(x.p), 0) / list.length;
+  let trend = ['First review', 'One review so far.', 'var(--text)'];
+  if (log.length >= 2) {
+    const recent = log.slice(-3), before = log.slice(-6, -3).length ? log.slice(-6, -3) : log.slice(0, 1);
+    const d = avg(recent) - avg(before);
+    trend = d > 0.5 ? ['Getting easier', 'Your last reviews moved up and right — towards easy and remembered.', '#8dba8b']
+      : d < -0.5 ? ['Getting harder', 'Your last reviews moved down and left — towards hard and forgot.', '#e0bd85']
+        : ['Steady', 'About the same as before.', 'var(--strong)'];
+  }
+  const day0 = new Date(); day0.setHours(0, 0, 0, 0);
+  const due = w.srs?.due || 0;
+  const left = Math.round((new Date(due).setHours(0, 0, 0, 0) - day0.getTime()) / 864e5);
+  const nextTxt = due <= Date.now() ? 'due now' : left <= 0 ? 'again later today' : `next in ${daysLabel(left)}`;
+  const when = t => { const d = new Date(t); return d >= day0 ? 'Today' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); };
+  const rows = log.map((x, i) => ({ ...x, i: i + 1 })).reverse().slice(0, 12).map(({ l, p, i }) => `<div class="wp-row">
+      <b>${i}</b><span class="wp-date">${when(l.t)}</span><span class="wp-what">${describe(p.a, p.b)}</span>
+      <span style="color:${colorOf(p.a, p.b)}">${l.n != null ? daysLabel(l.n) : ''}</span></div>`).join('');
+  return `<div class="wp-top"><div class="wp-dia">${diamondSvg({ size: 170, margin: 14, trail: log.slice(-8).map(x => x.p) })}</div>
+      <div class="wp-sum"><b style="color:${trend[2]}">${trend[0]}</b><span>${trend[1]}</span><small>${log.length} review${log.length === 1 ? '' : 's'} · ${nextTxt}</small></div></div>
+    <div class="wp-list">${rows}</div>
+    <p class="hint tip" style="margin:0">Each review saves the spot you chose. Numbers show the order; the white dot is the latest.</p>`;
+}
+
 export async function openWordCard(wordId, { fromNote = null, onChanged, find = {} } = {}) {
   let w = await db.getWord(wordId);
   if (!w) { toast('That word is no longer saved'); return; }
@@ -236,18 +296,21 @@ export async function openWordCard(wordId, { fromNote = null, onChanged, find = 
   try { tab = localStorage.getItem(TAB_KEY) || 'dict'; } catch { /* default */ }
 
   const html = () => `<div class="wd-card">
-    <div class="wd-head"><div class="txt"><h2>${esc(w.word)}</h2><small>Vocabulary · all series</small></div>
-      ${w.audio ? `<button type="button" class="icon-btn wd-say" data-wc="say" aria-label="Pronounce">${I.speaker || svg('<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>', 20, 1.8)}</button>` : ''}</div>
+    <div class="wd-head"><div class="txt"><h2>${esc(w.word)}</h2>${w.phonetic ? `<span class="wd-ipa">${esc(w.phonetic)}</span>` : ''}<small>Vocabulary · all series</small></div>
+      <button type="button" class="icon-btn wd-say${w.audio ? '' : ' is-voice'}" data-wc="say" aria-label="${w.audio ? 'Pronounce' : 'Pronounce (phone voice)'}">${I.speaker || svg('<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>', 20, 1.8)}</button></div>
     ${w.forms?.length ? `<div class="wd-forms"><small>Forms</small>${w.forms.map(f => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}
     <div class="vis-tabs wd-tabs" role="tablist">
       <button type="button" role="tab" aria-selected="${tab === 'dict'}" data-wtab="dict">Dictionary</button>
-      <button type="button" role="tab" aria-selected="${tab === 'mine'}" data-wtab="mine">My notes${w.mine ? '<i></i>' : ''}</button></div>
-    ${tab === 'dict'
+      <button type="button" role="tab" aria-selected="${tab === 'mine'}" data-wtab="mine">My notes${w.mine ? '<i></i>' : ''}</button>
+      <button type="button" role="tab" aria-selected="${tab === 'prog'}" data-wtab="prog">Progress</button></div>
+    ${tab === 'prog' ? progressHtml(w) : tab === 'dict'
       ? (w.meanings?.length ? `<div class="wd-dict">${groupHtml(w.meanings)}</div>
           <small class="wd-src">${esc([...new Set(w.meanings.map(m => SRC_NAME[m.src] || ''))].filter(Boolean).join(' · '))}</small>`
         : `<p class="hint" style="margin:0">No dictionary meanings saved yet.</p>`)
-      : `<textarea class="text-area wd-mine" rows="5" placeholder="Your own words, a memory hook, how the story uses it…">${esc(w.mine || '')}</textarea>
-         <p class="hint tip" style="margin:0">Saved as you type. Kept apart from the dictionary text.</p>`}
+      : `<textarea class="text-area wd-mine" rows="5" placeholder="Your own words, how the story uses it…">${esc(w.mine || '')}</textarea>
+         <label class="wd-hook-field"><span>Memory hook</span>
+           <textarea class="text-area wd-hook" rows="2" placeholder="A picture, a word it sounds like, a scene…">${esc(w.hook || '')}</textarea></label>
+         <p class="hint tip" style="margin:0">Saved as you type. The memory hook shows when you review the word.</p>`}
     <div class="wd-icons">
       <button type="button" class="wd-icon" data-wc="edit" aria-label="Forms of the word" title="Forms">${FORMS_ICON}</button>
       <button type="button" class="wd-icon" data-wc="find" aria-label="Find every use (all forms)" title="Find">${svg('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>', 22)}</button>
@@ -269,8 +332,9 @@ export async function openWordCard(wordId, { fromNote = null, onChanged, find = 
     };
     let saveTimer = null;
     box.addEventListener('input', e => {
-      if (!e.target.matches('.wd-mine')) return;
-      w.mine = e.target.value;
+      if (!e.target.matches('.wd-mine, .wd-hook')) return;
+      if (e.target.matches('.wd-mine')) w.mine = e.target.value;
+      else w.hook = e.target.value;
       clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => { w = await saveWord(w); }, 400);
     });
@@ -286,7 +350,7 @@ export async function openWordCard(wordId, { fromNote = null, onChanged, find = 
       const b = e.target.closest('[data-wc]');
       if (!b) return;
       const act = b.dataset.wc;
-      if (act === 'say') new Audio(w.audio).play().catch(() => toast('Couldn’t play the sound'));
+      if (act === 'say') sayWord(w);
       if (act === 'edit') openEditWord(w.id, { onChanged });
       if (act === 'attach') openAttach(w.id, { onChanged });
       if (act === 'find') {
@@ -296,8 +360,10 @@ export async function openWordCard(wordId, { fromNote = null, onChanged, find = 
       if (act === 'define') openDefine({
         text: w.word,
         saved: w.meanings || [],
-        onUpdate: async meanings => {
-          w = await saveWord({ ...(await db.getWord(wordId)), meanings });
+        onUpdate: async (meanings, sound = {}) => {
+          const cur = await db.getWord(wordId);
+          w = await saveWord({ ...cur, meanings, phonetic: cur.phonetic || sound.phonetic || '', audio: cur.audio || sound.audio || '' });
+          keepAudio(w.audio);
           closeSheet();
           toast('Meanings updated');
           onChanged?.();
@@ -317,7 +383,8 @@ export async function openWordCard(wordId, { fromNote = null, onChanged, find = 
 export async function addMeanings(wordId, found) {
   const w = await db.getWord(wordId);
   if (!w) return;
-  await saveWord(mergeInto(w, { meanings: found.meanings, keys: [found.headword], audio: found.audio }));
+  const rec = await saveWord(mergeInto(w, { meanings: found.meanings, keys: [found.headword], audio: found.audio, phonetic: found.phonetic }));
+  keepAudio(rec.audio);
   toast(`Meanings added to “${w.word}”`);
 }
 
@@ -582,11 +649,19 @@ export async function renderWordsPage(app) {
     </div>
     <label class="search-box">${I.search}<input id="wl-q" type="search" placeholder="Search words and forms" value="${esc(wordQuery)}" autocomplete="off"></label>
     <div class="chip-row words-sort">${[['az', 'A–Z'], ['recent', 'Recently saved'], ['met', 'Most saved']].map(([k, l]) => `<button type="button" class="chip${view.sort === k ? ' is-on' : ''}" data-ws="${k}" aria-pressed="${view.sort === k}">${l}</button>`).join('')}</div>
+    <a class="rv-banner" href="#/review" hidden></a>
     <div class="list-meta"><span id="wl-count"></span></div>
     <div class="words-list"></div>
   </main>`;
 
   const listEl = app.querySelector('.words-list');
+  if (words.length) import('./review.js').then(async r => {
+    const c = await r.dueCount();
+    const el = app.querySelector('.rv-banner');
+    if (!el) return;
+    el.innerHTML = `<span><b>Review your words</b><small>${c.due ? `${c.due} due today` : c.fresh ? `${c.fresh} new to start` : 'Nothing due — practise anyway'}</small></span>${I.next}`;
+    el.hidden = false;
+  });
   const drawList = () => {
     const q = norm(wordQuery);
     const shown = inView.filter(w => !q || allForms(w).some(f => f.includes(q)));

@@ -795,7 +795,8 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
     if (act === 'update') {
       const meanings = [...saved.filter((m, i) => keep[i]),
         ...[...picks.values()].map(p => ({ pos: p.pos, text: p.text, example: p.withEx ? p.example : '', src: p.src }))];
-      onUpdate(meanings);
+      const i = info();
+      onUpdate(meanings, { phonetic: i?.phonetic || '', audio: i?.audio || '' });
       return;
     }
     if (act === 'note') {
@@ -804,7 +805,7 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
         ? [...picks.values()].map(p => ({ pos: p.pos, text: p.text, example: p.withEx ? p.example : '', src: p.src }))
         : (i ? i.parts.slice(0, 2).map(([pos, defs]) => ({ pos, text: defs[0].text, example: '', src: srcOf() })) : []);
       onNote(picks.size ? picksText() : i ? noteText(i) : '', {
-        headword: i?.word || word, meanings, audio: i?.audio || '', text: picks.size ? picksText() : i ? noteText(i) : '',
+        headword: i?.word || word, meanings, audio: i?.audio || '', phonetic: i?.phonetic || '', text: picks.size ? picksText() : i ? noteText(i) : '',
       });
     }
     else if (act === 'clear') { picks.clear(); render(); }

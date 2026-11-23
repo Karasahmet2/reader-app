@@ -10,7 +10,7 @@
 //
 // ► After changing ANY file, bump VERSION (reader-v16, reader-v17, …) so phones update.
 
-const VERSION = 'reader-v26';
+const VERSION = 'reader-v29';
 const APP_FILES = [
   './',
   './index.html',
@@ -29,12 +29,15 @@ const APP_FILES = [
   './js/codex-guide.js',
   './js/trash.js',
   './js/words.js',
+  './js/review.js',
+  './js/diamond.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
 const FONT_CACHE = 'reader-fonts';
+const AUDIO_CACHE = 'reader-audio'; // pronunciations of saved words, kept across versions
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
@@ -48,7 +51,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k !== VERSION && k !== FONT_CACHE).map(k => caches.delete(k)));
+    await Promise.all(keys.filter(k => k !== VERSION && k !== FONT_CACHE && k !== AUDIO_CACHE).map(k => caches.delete(k)));
     await self.clients.claim();
   })());
 });
@@ -57,6 +60,15 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
+
+  // A saved word's recording: from the phone when it's kept there.
+  if (url.origin !== self.location.origin && /\.(mp3|ogg|wav)$/i.test(url.pathname)) {
+    event.respondWith((async () => {
+      const hit = await (await caches.open(AUDIO_CACHE)).match(request.url);
+      return hit || fetch(request);
+    })());
+    return;
+  }
 
   // Google Fonts: saved the first time they load, then always from the phone.
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {

@@ -202,6 +202,46 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 17.1 — Rate on the diamond
+
+- Forgot / Hard / Knew it are replaced by a **diamond**: E (easy) at the top, R (remembered)
+  right, H (hard) at the bottom, F (forgot) left. Drag the dot — it snaps to 25 points on a
+  dotted grid — and each point shows its next review ("next in 6 days"). Then Next.
+- Typed answers place the dot for you (right → remembered side, wrong → F); move it if it felt
+  different. The dashed ring is where you put the word last time.
+- The 6 points nearest F count as forgotten (comes back later today, or tomorrow if it felt
+  easy, and once more at the end of the session).
+- **Tough words** = the average of a word's last 3 dots is in the tough zone
+  (−2,0) · (0,0) · (1,−1) · (0,−2): forgot or hard. Each shows a small diamond with its trail.
+- **Word card → Progress tab**: every review's spot, numbered and joined, a trend line
+  (getting easier / harder / steady) and the list of reviews.
+- The session summary shows today's answers on the diamond: remembered · tough · forgot.
+
+## Update 17 — Vocabulary review
+
+- **Review** (Library → "Review your words", or the Words page): pick 7, 14 or 21 cards. Due
+  words come first, then new words (at most a third), then the words due soonest.
+- **Card types** (switch them on/off on the Review page): What does it mean? · Which word fits?
+  (type it; any saved form counts, one letter off is "Nearly") · Listen: hear the word · Listen:
+  a sentence from your book (the phone's voice reads it) · Use it in your own sentence (known
+  words, now and then; saved to My notes).
+- The answer side is a small word card: pronunciation, meanings, My notes, memory hook, the
+  sentence from your book, forms. Forgot / Hard / Knew it set the next review; a forgotten word
+  comes back once more at the end of the session.
+- **Progress**: known well (3 weeks+), learning, remembered on time, due in the next 7 days, by
+  series. No streaks. **Tough words**: forgotten 4 times or more — add a memory hook.
+- Memory hook also on the word card (My notes tab). The schedule is saved on each word, so it's
+  in backups. Choices (size, card types, series) are kept in the backup too.
+
+## Update 16.4 — Pronunciation
+
+- Saving a word from Define keeps its written pronunciation (e.g. "UK /ɡlɑːs/ · US /ɡlæs/"),
+  shown under the word on its card. Wiktionary and Webster give it; WordNet (offline) doesn't.
+- The recording (Webster) is kept on the phone, so it plays without internet. Words saved
+  before are kept when the app starts.
+- No recording? The speaker button uses the phone's own voice instead (grey button).
+- An older word without a pronunciation: word card → Define → Update meanings fills it in.
+
 ## Update 16.3 — Sheets hold the page still, and pull down to close
 
 - While a sheet or panel is open (word card, notes, Show in text, Define, sounds…), the chapter
@@ -401,7 +441,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v26` → `reader-v27`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v29` → `reader-v30`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

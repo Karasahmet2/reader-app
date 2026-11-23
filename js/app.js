@@ -24,6 +24,7 @@ import * as dictionary from './dictionary.js';
 import * as codex from './codex.js';
 import * as trash from './trash.js';
 import * as words from './words.js';
+import * as review from './review.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -230,6 +231,7 @@ async function route() {
     else if (view === 'settings') await renderSettings();
     else if (view === 'backup') await renderBackup();
     else if (view === 'words') await words.renderWordsPage(app);
+    else if (view === 'review') cleanupView = await review.renderReview(app, id);
     else if (view === 'trash') await trash.renderTrashPage(app, { days: settings.trashDays ?? 30, onDays: d => { settings = { ...settings, trashDays: d }; saveSettings(settings); } });
     else await renderLibrary();
     window.scrollTo(0, view === 'read' ? window.scrollY : (restoreY ?? (keepScroll ? y : 0)));
@@ -354,6 +356,8 @@ async function renderLibrary() {
   const counts = { all: libGroups.length };
   for (const f of filters.slice(1)) counts[f] = libGroups.filter(g => statusOf(g.series) === f).length;
 
+  const rv = await review.dueCount();
+  const reviewRow = rv.total ? `<a class="rv-banner" href="#/review"><span><b>Review your words</b><small>${rv.due ? `${rv.due} due today` : rv.fresh ? `${rv.fresh} new to start` : 'Nothing due — practise anyway'}</small></span>${I.next}</a>` : '';
   app.innerHTML = `<main class="page">
     <div class="row-head">
       <h1 class="page-title">Library</h1>
@@ -368,6 +372,7 @@ async function renderLibrary() {
       <input id="lib-search" type="search" placeholder="Search series" value="${esc(libQuery)}" autocomplete="off">
     </label>` : ''}
     ${backupBanner()}
+    ${reviewRow}
     <nav class="filter-chips" aria-label="Filter series">
       ${filters.map(f => `<button type="button" data-filter="${f}" aria-pressed="${settings.libFilter === f}">
         ${f === 'all' ? 'All' : STATUS[f].label}${f !== 'all' && counts[f] ? ` <span class="count">${counts[f]}</span>` : ''}
