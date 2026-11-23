@@ -17,17 +17,19 @@ import { isLapse, inZone, logPoint, describe, colorOf, daysLabel, diamondSvg, at
 
 const DAY = 864e5;
 const KNOWN = 21;                 // days between reviews that count as "known well"
-const SIZES = [[7, 'I don’t have much time', 'about 2 minutes'], [14, 'I have some time', 'about 5 minutes'], [21, 'I have time', 'about 8 minutes']];
-const STYLES = [
-  ['mixed', 'Mixed', 'A mix of all styles · new words start with their meaning'],
-  ['meaning', 'Meaning', 'See the word in your sentence, recall what it means'],
-  ['fits', 'Fill the gap', 'See the meaning, type the missing word'],
-  ['listen', 'Listening', 'Hear the word or a sentence, type what you hear'],
-  ['use', 'Write a sentence', 'Use the word in a sentence of your own'],
+const SIZES = [2, 3, 5, 7, 11, 13, 17, 19, 23];
+// The practice styles: a symbol each, on or off.
+const KINDS = [
+  ['meaning', 'Meaning', '<path d="M3 5.5h6a3 3 0 0 1 3 3V20a2.5 2.5 0 0 0-2.5-2.5H3z"/><path d="M21 5.5h-6a3 3 0 0 0-3 3V20a2.5 2.5 0 0 1 2.5-2.5H21z"/>'],
+  ['fits', 'Fill the gap', '<path d="M3 12h3.5M17.5 12H21"/><rect x="8.5" y="8" width="7" height="8" rx="1.5" stroke-dasharray="2.2 2"/>'],
+  ['listenWord', 'Hear the word', '<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>'],
+  ['listenSentence', 'Hear a sentence', '<path d="M3 9.5v5h3l4 3v-11l-4 3z"/><path d="M14 8.5h7M14 12h7M14 15.5h4.5"/>'],
+  ['use', 'Write a sentence', '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>'],
 ];
-// Card kinds you can switch between on a card.
-const KINDS = [['meaning', 'Meaning'], ['fits', 'Fill the gap'], ['listenWord', 'Hear the word'], ['listenSentence', 'Hear a sentence'], ['use', 'Write']];
-const K_SIZE = 'reader-review-size', K_STYLE = 'reader-review-style', K_SERIES = 'reader-review-series';
+const ALL_KINDS = KINDS.map(k => k[0]);
+const kindIcon = (k, size = 22) => svg(KINDS.find(x => x[0] === k)[2], size, 1.8);
+const K_SIZE = 'reader-review-count', K_STYLES = 'reader-review-styles', K_SERIES = 'reader-review-series';
+const stylesOn = () => { const v = get(K_STYLES, null); return Array.isArray(v) ? v.filter(k => ALL_KINDS.includes(k)) : [...ALL_KINDS]; };
 
 const norm = s => String(s || '').toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ').trim();
 const get = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
@@ -226,8 +228,8 @@ const head = (title, subtitle, right = '') => `<div class="row-head rv-head">
 async function renderHome(app) {
   const lib = await library();
   const { shown, series, pick } = lib;
-  const style = get(K_STYLE, 'mixed');
-  const size = get(K_SIZE, 14);
+  let on = stylesOn();
+  let size = SIZES.includes(get(K_SIZE, 7)) ? get(K_SIZE, 7) : 7;
   const due = shown.filter(w => isDue(w)).length;
   const fresh = shown.filter(isNew).length;
   const known = shown.filter(isKnown).length;
@@ -241,29 +243,51 @@ async function renderHome(app) {
       <span><b>${due}</b><small>due today</small></span>
       <span><b>${fresh}</b><small>new words</small></span>
       <span><b>${known}</b><small>known well</small></span></div>
-    <section class="rv-sec"><h2 class="rv-label">Practice style</h2>
-      <div class="rv-types">${STYLES.map(([k, t, note]) => `<label class="rv-type rv-style">
-        <input type="radio" name="rv-style" value="${k}" ${style === k ? 'checked' : ''}><i aria-hidden="true"></i>
-        <span><span>${t}</span><small>${note}</small></span></label>`).join('')}</div>
-      <p class="hint tip">You can switch the style of any card while you practise.</p></section>
-    <section class="rv-sec"><h2 class="rv-label">How much time do you have?</h2>
-      ${SIZES.map(([n, t, s]) => `<button type="button" class="rv-size${n === size ? ' is-last' : ''}" data-size="${n}">
-        <b>${n}</b><span><span>${t}</span><small>${s}${n === size ? ' · last time you picked this' : ''}</small></span></button>`).join('')}
-      <p class="hint tip">Due words come first; the rest is filled with new words (at most a third), so the session always has the size you picked.</p></section>
+    <section class="rv-sec"><h2 class="rv-label">Practice styles</h2>
+      <div class="rv-kinds">${KINDS.map(([k, t]) => `<button type="button" class="rv-kind${on.includes(k) ? ' is-on' : ''}" data-style="${k}" aria-pressed="${on.includes(k)}" aria-label="${t}" title="${t}">${kindIcon(k, 26)}</button>`).join('')}</div>
+      <p class="rv-kinds-on"></p></section>
+    <section class="rv-sec"><h2 class="rv-label">How many cards?</h2>
+      <div class="rv-counts">${SIZES.map(n => `<button type="button" class="rv-count-btn${n === size ? ' is-on' : ''}" data-size="${n}" aria-pressed="${n === size}">${n}</button>`).join('')}</div>
+      <p class="hint tip">Due words first, then new ones.</p></section>
     <div class="rv-two">
       <a class="btn" href="#/review/progress">Progress</a>
-      <a class="btn" href="#/review/tough">Tough words${tough ? ` · ${tough}` : ''}</a></div>`}
+      <a class="btn" href="#/review/tough">Tough words${tough ? ` · ${tough}` : ''}</a></div>
+    <div class="rv-start"><button type="button" class="btn btn-accent" data-rv="start"></button></div>`}
   </main>`;
+  const page = app.querySelector('.rv-page');
+  const showOn = () => {
+    const names = KINDS.filter(([k]) => on.includes(k)).map(k => k[1]);
+    const line = page.querySelector('.rv-kinds-on');
+    if (line) line.innerHTML = names.length
+      ? `On: <b>${names.join(' · ')}</b><br><span>Tap a symbol to turn it on or off. New words start with their meaning.</span>`
+      : '<b>All styles are off.</b> Turn at least one on to start.';
+    const startBtn = page.querySelector('[data-rv="start"]');
+    if (startBtn) { startBtn.textContent = `Start · ${size} cards`; startBtn.disabled = !names.length; }
+  };
+  showOn();
 
-  app.querySelector('.rv-page').addEventListener('change', e => {
-    if (e.target.name === 'rv-style') set(K_STYLE, e.target.value);
-  });
-  app.querySelector('.rv-page').addEventListener('click', async e => {
+  page.addEventListener('click', async e => {
+    const st = e.target.closest('[data-style]');
+    if (st) {
+      const k = st.dataset.style;
+      on = on.includes(k) ? on.filter(x => x !== k) : ALL_KINDS.filter(x => x === k || on.includes(x));
+      set(K_STYLES, on);
+      st.classList.toggle('is-on', on.includes(k));
+      st.setAttribute('aria-pressed', on.includes(k));
+      showOn();
+      return;
+    }
     const sz = e.target.closest('[data-size]');
     if (sz) {
-      const n = Number(sz.dataset.size);
-      set(K_SIZE, n);
-      if (!start(lib, n)) { toast('No words to review here yet'); return; }
+      size = Number(sz.dataset.size);
+      set(K_SIZE, size);
+      page.querySelectorAll('[data-size]').forEach(b => { b.classList.toggle('is-on', b === sz); b.setAttribute('aria-pressed', b === sz); });
+      showOn();
+      return;
+    }
+    if (e.target.closest('[data-rv="start"]')) {
+      if (!on.length) return;
+      if (!start(lib, size)) { toast('No words to review here yet'); return; }
       location.hash = '#/review/go';
       return;
     }
@@ -308,22 +332,15 @@ function canKind(w, ctxs, k) {
   return false;
 }
 function pickType(w, ctxs) {
-  const style = get(K_STYLE, 'mixed');
-  const ok = k => canKind(w, ctxs, k);
-  const any = list => { const l = list.filter(ok); return l.length ? l[Math.floor(Math.random() * l.length)] : 'meaning'; };
-  if (style === 'meaning') return 'meaning';
-  if (style === 'fits') return ok('fits') ? 'fits' : 'meaning';
-  if (style === 'listen') return any(['listenWord', 'listenSentence']);
-  if (style === 'use') return 'use';
-  // Mixed: a new word starts with its meaning; known words now and then get "Write a sentence".
+  // A brand-new word starts with its meaning; after that, only the styles you turned on.
   if (isNew(w)) return 'meaning';
-  if (isKnown(w) && session.useCount < 2 && Math.random() < 0.3) return 'use';
-  return any(['meaning', 'fits', 'listenWord', 'listenSentence']);
+  const l = stylesOn().filter(k => canKind(w, ctxs, k));
+  return l.length ? l[Math.floor(Math.random() * l.length)] : 'meaning';
 }
 
 /** The row for trying the word another way. */
-const switcher = (w, ctxs, cur, label = 'Style') => `<div class="rv-switch" role="group" aria-label="Try this word another way">
-  <small>${label}</small>${KINDS.map(([k, t]) => `<button type="button" class="chip${k === cur ? ' is-on' : ''}" data-kind="${k}" ${canKind(w, ctxs, k) ? '' : 'disabled'} aria-pressed="${k === cur}">${t}</button>`).join('')}</div>`;
+const switcher = (w, ctxs, cur, label = '') => `<div class="rv-switch" role="group" aria-label="Try this word another way">
+  ${label ? `<small>${label}</small>` : ''}${KINDS.map(([k, t]) => `<button type="button" class="rv-sw${k === cur ? ' is-on' : ''}" data-kind="${k}" ${canKind(w, ctxs, k) ? '' : 'disabled'} aria-pressed="${k === cur}" aria-label="${t}" title="${t}">${kindIcon(k, 20)}</button>`).join('')}</div>`;
 
 const bar = () => {
   const total = session.queue.length;
@@ -534,7 +551,6 @@ async function drawDone(app) {
   const nextDue = lib.shown.filter(w => !isNew(w) && srsOf(w).due > endOfToday() && srsOf(w).due <= tomorrowEnd).length;
   const left = buildSession(lib.shown.filter(w => isDue(w) || isNew(w)), session.size).length;
   const reviewed = pts.length;
-  const progress = (await db.getAllProgress()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
   app.innerHTML = `<main class="page rv-done">
     <div class="rv-done-top"><h1>${plural(reviewed, 'answer')}</h1>
       <div class="rv-done-dia">${diamondSvg({ size: 230, margin: 16, dots: pts, zone: true })}</div>
@@ -545,8 +561,13 @@ async function drawDone(app) {
       <p class="hint">${session.started ? `${plural(session.started, 'new word')} started. ` : ''}${nextDue ? `Next words are due tomorrow (${nextDue}).` : 'Nothing more is due tomorrow.'} The dashed area is the tough zone.</p></div>
     <div class="rv-foot col">
       ${left ? `<button type="button" class="btn" data-rv="more">${left} more</button>` : ''}
-      <a class="btn btn-accent" href="${progress ? `#/read/${progress.chapterId}` : '#/'}">Back to reading</a></div></main>`;
+      <button type="button" class="btn btn-accent" data-rv="home">Back to Review</button></div></main>`;
   app.querySelector('.rv-done').addEventListener('click', async e => {
+    if (e.target.closest('[data-rv="home"]')) {
+      session = null;
+      goBack('#/review'); // the Review page you started from
+      return;
+    }
     if (!e.target.closest('[data-rv="more"]')) return;
     const fresh = await library();
     if (!start(fresh, session.size)) return;

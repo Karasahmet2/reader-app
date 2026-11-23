@@ -39,13 +39,13 @@ async def main():
         # 1 Library and Review page
         banner = (await page.inner_text('.rv-banner')).replace('\n', ' | '); print('1 library:', banner)
         assert '3 new to start' in banner
-        await page.click('.rv-banner'); await page.wait_for_selector('.rv-size')
+        await page.click('.rv-banner'); await page.wait_for_selector('.rv-counts')
         stats = (await page.inner_text('.rv-stats')).replace('\n', ' '); print('  review page:', stats)
         assert stats.startswith('0 due today 3 new words 0 known well')
         await page.screenshot(path=f'{SH}/v17-home.png')
 
         # 2 a session of new words: meaning cards; Forgot brings a word back
-        await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-card')
+        await page.click('[data-size="7"]'); await page.click('[data-rv="start"]'); await page.wait_for_selector('.rv-card')
         assert await ev('location.hash') == '#/review/go'
         assert await page.query_selector('.rv-meaning')
         ctxt = await page.inner_text('.rv-ctx'); print('2 card 1:', ctxt.replace('\n', ' | '))
@@ -82,9 +82,16 @@ async def main():
             else: await page.click('[data-rv="reveal"]')
             await page.wait_for_selector('.rv-dia svg'); await rate(2, 1)
         done = (await page.inner_text('.rv-done')).replace('\n', ' '); print('  done:', done)
+        assert 'Back to reading' not in done
         assert '4 answers' in done and '3 new words started' in done and '3 remembered' in done.replace('\n', ' ').replace('3 remembered', '3 remembered')
         assert await page.query_selector('.rv-done-dia svg')
         await page.screenshot(path=f'{SH}/v17-done.png')
+        await page.click('[data-rv="home"]'); await page.wait_for_selector('.rv-counts')
+        print('  Back to Review →', await ev('location.hash'), '|', (await page.inner_text('.rv-stats')).replace('\n', ' '))
+        assert await ev('location.hash') == '#/review'
+        await page.go_back(); await page.wait_for_timeout(400)
+        print('  then phone back →', await ev('location.hash'))
+        assert await ev('location.hash') != '#/review/go', 'back from Review must not reopen the finished session'
         srs = await ev(f"import('./js/db.js').then(d => d.getWord({ids[0]})).then(w => w.srs)")
         print('  glass schedule:', {k: srs[k] for k in ('reps', 'interval', 'lapses', 'streak')})
         assert srs['lapses'] == 1 and srs['reps'] == 2 and srs['interval'] == 3
@@ -92,10 +99,20 @@ async def main():
         # 3 "Which word fits?": one letter off = nearly (Hard suggested); a form counts
         await ev(f"""import('./js/db.js').then(async d => {{ for (const id of {json.dumps(ids)}) {{ const w = await d.getWord(id);
             await d.putWord({{ ...w, srs: {{ reps: 2, interval: 3, ease: 2.5, due: Date.now() - 1000, lapses: 0, streak: 1, log: [] }} }}); }} }})""")
-        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
-        await page.check('input[name="rv-style"][value="fits"]')
-        assert await ev("localStorage.getItem('reader-review-style')") == '"fits"'
-        await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-fits')
+        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-counts')
+        # styles are symbols you turn on and off; Start is off when none is on
+        for k in ['meaning', 'fits', 'listenWord', 'listenSentence', 'use']:
+            await page.click(f'[data-style="{k}"]')
+        off = await page.inner_text('.rv-kinds-on'); print('3 all styles off:', off.replace('\n', ' '), '| start disabled:', await page.is_disabled('[data-rv="start"]'))
+        assert await page.is_disabled('[data-rv="start"]') and 'All styles are off' in off
+        await page.click('[data-style="fits"]')
+        assert not await page.is_disabled('[data-rv="start"]')
+        assert await ev("localStorage.getItem('reader-review-styles')") == '["fits"]'
+        await page.click('[data-size="3"]')
+        print('  start button:', await page.inner_text('[data-rv="start"]'))
+        assert (await page.inner_text('[data-rv="start"]')) == 'Start · 3 cards'
+        await page.screenshot(path=f'{SH}/v17-home.png')
+        await page.click('[data-size="7"]'); await page.click('[data-rv="start"]'); await page.wait_for_selector('.rv-fits')
         print('3 fits card:', (await page.inner_text('.rv-body')).replace('\n', ' | ')[:200])
         await page.screenshot(path=f'{SH}/v17-fits.png')
         word = await ev("document.querySelector('.rv-ctx small').textContent")
@@ -128,10 +145,10 @@ async def main():
         # 4 listening: a sentence from the book, read by the phone's voice
         await ev(f"""import('./js/db.js').then(async d => {{ for (const id of {json.dumps(ids)}) {{ const w = await d.getWord(id);
             await d.putWord({{ ...w, srs: {{ ...w.srs, due: Date.now() - 1000 }} }}); }} }})""")
-        await ev("() => { localStorage.setItem('reader-review-style', JSON.stringify('listen')); }")
-        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
+        await ev("() => { localStorage.setItem('reader-review-styles', JSON.stringify(['listenSentence'])); }")
+        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-counts')
         await ev("() => { Math.random = () => 0.99; window.__said = []; speechSynthesis.speak = u => window.__said.push(u.text); }")
-        await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-listenSentence')
+        await page.click('[data-size="7"]'); await page.click('[data-rv="start"]'); await page.wait_for_selector('.rv-listenSentence')
         said = await ev('window.__said'); print('4 spoken:', said)
         assert said and ('glass' in said[0] or 'grimy' in said[0] or 'towered' in said[0])
         await page.screenshot(path=f'{SH}/v17-listen-sentence.png')
@@ -143,9 +160,10 @@ async def main():
         # 5 listening: hear the word (needs a pronunciation)
         await ev(f"""import('./js/db.js').then(async d => {{ for (const id of {json.dumps(ids)}) {{ const w = await d.getWord(id);
             await d.putWord({{ ...w, phonetic: '/x/', srs: {{ ...w.srs, due: Date.now() - 1000 }} }}); }} }})""")
-        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
+        await ev("() => { localStorage.setItem('reader-review-styles', JSON.stringify(['listenWord'])); }")
+        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-counts')
         await ev("() => { Math.random = () => 0; window.__said = []; speechSynthesis.speak = u => window.__said.push(u.text); }")
-        await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-listenWord')
+        await page.click('[data-size="7"]'); await page.click('[data-rv="start"]'); await page.wait_for_selector('.rv-listenWord')
         said = await ev('window.__said'); print('5 hear the word, spoken:', said)
         assert said and said[0] in ('glass', 'grimy', 'tower')
         await page.click('[data-rv="slow"]'); await page.wait_for_timeout(200)
@@ -156,9 +174,9 @@ async def main():
         # 6 use it in your own sentence (words known well)
         await ev(f"""import('./js/db.js').then(async d => {{ const w = await d.getWord({ids[0]});
             await d.putWord({{ ...w, srs: {{ ...w.srs, interval: 30, due: Date.now() - 1000 }} }}); }})""")
-        await ev("() => { localStorage.setItem('reader-review-style', JSON.stringify('use')); }")
-        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
-        await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-card')
+        await ev("() => { localStorage.setItem('reader-review-styles', JSON.stringify(['use'])); }")
+        await page.goto(B + '#/review'); await page.wait_for_selector('.rv-counts')
+        await page.click('[data-size="7"]'); await page.click('[data-rv="start"]'); await page.wait_for_selector('.rv-card')
         if not await page.query_selector('.rv-use'):
             # the known word may not be first; answer until it comes
             for _ in range(4):

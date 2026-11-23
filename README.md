@@ -202,6 +202,21 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 17.5 — Style symbols and card counts
+
+- **Practice styles** are 5 symbols you turn on and off (book = Meaning, dashed box = Fill the
+  gap, speaker = Hear the word, speaker + lines = Hear a sentence, pencil = Write). A line under
+  them names the ones that are on. With all off, Start is disabled.
+- **How many cards?** 2 · 3 · 5 · 7 · 11 · 13 · 17 · 19 · 23, then **Start · N cards**.
+- New words still start with their meaning; after that only the styles you turned on are used.
+- The switcher on each card uses the same symbols.
+- The session summary: **N more** and **Back to Review** (no "Back to reading").
+
+## Update 17.4 — Back to Review
+
+- The session summary has a **Back to Review** button (to the Review page you started from,
+  with fresh counts), besides "N more" and "Back to reading".
+
 ## Update 17.3 — A 7 × 7 grid
 
 - The rating square now has 3 points on each side of the centre lines: 7 × 7 = 49 points,
@@ -461,7 +476,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v31` → `reader-v32`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v33` → `reader-v34`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.
