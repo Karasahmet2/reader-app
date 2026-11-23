@@ -17,7 +17,7 @@ const FORMAT = 1; // bump if the file layout ever changes (new optional parts do
 const CHOICE_KEYS = [
   'reader-hidden-tags', 'reader-hidden-rooms', 'reader-codex-view', 'reader-notes-sort',
   'reader-notes-series', 'reader-define-tab', 'reader-define-mw', 'reader-sounds',
-  'reader-review-size', 'reader-review-types', 'reader-review-series',
+  'reader-review-size', 'reader-review-style', 'reader-review-series',
 ];
 const DICT_KEYS = ['mwLearnersKey', 'mwCollegiateKey'];
 

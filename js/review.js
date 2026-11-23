@@ -13,19 +13,21 @@
 import * as db from './db.js';
 import { esc, plural, short, svg, toast, goBack, replaceHash, openSheet, closeOverlay, I } from './ui.js';
 import { allForms, groupHtml, saveWord, sayWord } from './words.js';
-import { toXY, isLapse, inZone, logPoint, describe, colorOf, daysLabel, diamondSvg, attachPicker } from './diamond.js';
+import { isLapse, inZone, logPoint, describe, colorOf, daysLabel, diamondSvg, attachPicker } from './diamond.js';
 
 const DAY = 864e5;
 const KNOWN = 21;                 // days between reviews that count as "known well"
 const SIZES = [[7, 'I don’t have much time', 'about 2 minutes'], [14, 'I have some time', 'about 5 minutes'], [21, 'I have time', 'about 8 minutes']];
-const TYPES = [
-  ['meaning', 'What does it mean?', ''],
-  ['fits', 'Which word fits?', ''],
-  ['listenWord', 'Listen: hear the word, type it', 'Only words with a pronunciation'],
-  ['listenSentence', 'Listen: a sentence from your book', 'The phone’s voice reads it; type the saved word'],
-  ['use', 'Use it in your own sentence', 'Only words you know well, now and then'],
+const STYLES = [
+  ['mixed', 'Mixed', 'A mix of all styles · new words start with their meaning'],
+  ['meaning', 'Meaning', 'See the word in your sentence, recall what it means'],
+  ['fits', 'Fill the gap', 'See the meaning, type the missing word'],
+  ['listen', 'Listening', 'Hear the word or a sentence, type what you hear'],
+  ['use', 'Write a sentence', 'Use the word in a sentence of your own'],
 ];
-const K_SIZE = 'reader-review-size', K_TYPES = 'reader-review-types', K_SERIES = 'reader-review-series';
+// Card kinds you can switch between on a card.
+const KINDS = [['meaning', 'Meaning'], ['fits', 'Fill the gap'], ['listenWord', 'Hear the word'], ['listenSentence', 'Hear a sentence'], ['use', 'Write']];
+const K_SIZE = 'reader-review-size', K_STYLE = 'reader-review-style', K_SERIES = 'reader-review-series';
 
 const norm = s => String(s || '').toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ').trim();
 const get = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
@@ -50,32 +52,29 @@ export const pointsOf = w => (srsOf(w).log || []).map(logPoint).filter(Boolean);
 export function isTough(w) {
   const pts = pointsOf(w).slice(-3);
   if (pts.length < 3) return false;
-  const xy = pts.map(p => toXY(p.a, p.b));
-  return inZone(xy.reduce((s, p) => s + p.x, 0) / 3, xy.reduce((s, p) => s + p.y, 0) / 3);
+  return inZone(pts.reduce((s, p) => s + p.x, 0) / 3, pts.reduce((s, p) => s + p.y, 0) / 3);
 }
 
-/** Days until the next review if you put the dot at (a, b). 0 = again later today. */
-export function daysFor(w, a, b) {
+/** Days until the next review if you put the dot at (x, y). 0 = again later today. */
+export function daysFor(w, x, y) {
   const s = srsOf(w);
-  const { x, y } = toXY(a, b);
-  if (isLapse(a, b)) return y > 0 ? 1 : 0;
-  const rem = (x + 2) / 4, ease = (y + 2) / 4;
+  if (isLapse(x, y)) return x <= -3 && y <= 0 ? 0 : 1;
+  const rem = (x + 3) / 6, ease = (y + 3) / 6;
   const base = !s.reps ? 3 : (s.interval || 1.5);
   return Math.max(1, Math.round(base * (0.3 + 1.5 * rem + 0.8 * ease)));
 }
 
-/** Record a review at point (a, b). Returns the word as saved. */
-export async function rate(w, a, b, now = Date.now()) {
+/** Record a review at point (x, y). Returns the word as saved. */
+export async function rate(w, x, y, now = Date.now()) {
   const s = srsOf(w);
-  const days = daysFor(w, a, b);
-  const { x, y } = toXY(a, b);
+  const days = daysFor(w, x, y);
   const wasDue = s.reps > 0 && s.due <= now;
-  const lapse = isLapse(a, b);
+  const lapse = isLapse(x, y);
   const next = { ...s, reps: s.reps + 1, last: now, interval: lapse ? 0 : days };
   next.due = days === 0 ? now + 10 * 60e3 : dayStart(now) + days * DAY;
   next.lapses = s.lapses + (lapse ? 1 : 0);
   next.streak = inZone(x, y) ? 0 : s.streak + 1;
-  next.log = [...(s.log || []), { t: now, a, b, n: days, d: wasDue ? 1 : 0 }].slice(-30);
+  next.log = [...(s.log || []), { t: now, x, y, s: 3, n: days, d: wasDue ? 1 : 0 }].slice(-30);
   return saveWord({ ...(await db.getWord(w.id)), srs: next });
 }
 
@@ -227,7 +226,7 @@ const head = (title, subtitle, right = '') => `<div class="row-head rv-head">
 async function renderHome(app) {
   const lib = await library();
   const { shown, series, pick } = lib;
-  const types = get(K_TYPES, {});
+  const style = get(K_STYLE, 'mixed');
   const size = get(K_SIZE, 14);
   const due = shown.filter(w => isDue(w)).length;
   const fresh = shown.filter(isNew).length;
@@ -242,23 +241,22 @@ async function renderHome(app) {
       <span><b>${due}</b><small>due today</small></span>
       <span><b>${fresh}</b><small>new words</small></span>
       <span><b>${known}</b><small>known well</small></span></div>
+    <section class="rv-sec"><h2 class="rv-label">Practice style</h2>
+      <div class="rv-types">${STYLES.map(([k, t, note]) => `<label class="rv-type rv-style">
+        <input type="radio" name="rv-style" value="${k}" ${style === k ? 'checked' : ''}><i aria-hidden="true"></i>
+        <span><span>${t}</span><small>${note}</small></span></label>`).join('')}</div>
+      <p class="hint tip">You can switch the style of any card while you practise.</p></section>
     <section class="rv-sec"><h2 class="rv-label">How much time do you have?</h2>
       ${SIZES.map(([n, t, s]) => `<button type="button" class="rv-size${n === size ? ' is-last' : ''}" data-size="${n}">
         <b>${n}</b><span><span>${t}</span><small>${s}${n === size ? ' · last time you picked this' : ''}</small></span></button>`).join('')}
       <p class="hint tip">Due words come first; the rest is filled with new words (at most a third), so the session always has the size you picked.</p></section>
-    <section class="rv-sec"><h2 class="rv-label">Card types</h2>
-      <div class="rv-types">${TYPES.map(([k, t, note]) => `<label class="rv-type">
-        <span><span>${t}</span>${note ? `<small>${note}</small>` : ''}</span>
-        <input type="checkbox" role="switch" data-type="${k}" ${types[k] !== false ? 'checked' : ''} ${k === 'meaning' ? 'disabled' : ''}><i aria-hidden="true"></i></label>`).join('')}</div></section>
     <div class="rv-two">
       <a class="btn" href="#/review/progress">Progress</a>
       <a class="btn" href="#/review/tough">Tough words${tough ? ` · ${tough}` : ''}</a></div>`}
   </main>`;
 
   app.querySelector('.rv-page').addEventListener('change', e => {
-    const t = e.target.closest('[data-type]');
-    if (!t) return;
-    set(K_TYPES, { ...get(K_TYPES, {}), [t.dataset.type]: t.checked });
+    if (e.target.name === 'rv-style') set(K_STYLE, e.target.value);
   });
   app.querySelector('.rv-page').addEventListener('click', async e => {
     const sz = e.target.closest('[data-size]');
@@ -301,18 +299,31 @@ function start(lib, size) {
   return true;
 }
 
-function pickType(w, ctxs) {
-  const s = srsOf(w);
-  if (!s.reps) return 'meaning';
-  const on = get(K_TYPES, {});
-  const ok = k => on[k] !== false;
-  if (ok('use') && isKnown(w) && session.useCount < 2 && Math.random() < 0.3) return 'use';
-  const opts = ['meaning'];
-  if (ok('fits') && ctxs.length && w.meanings?.length) opts.push('fits');
-  if (ok('listenWord') && (w.audio || w.phonetic) && (w.audio || canSpeak())) opts.push('listenWord');
-  if (ok('listenSentence') && ctxs.length && canSpeak()) opts.push('listenSentence');
-  return opts[Math.floor(Math.random() * opts.length)];
+/** Can this word be shown as this kind of card? */
+function canKind(w, ctxs, k) {
+  if (k === 'meaning' || k === 'use') return true;
+  if (k === 'fits') return !!(ctxs.length && w.meanings?.length);
+  if (k === 'listenWord') return !!((w.audio || w.phonetic) && (w.audio || canSpeak()));
+  if (k === 'listenSentence') return !!(ctxs.length && canSpeak());
+  return false;
 }
+function pickType(w, ctxs) {
+  const style = get(K_STYLE, 'mixed');
+  const ok = k => canKind(w, ctxs, k);
+  const any = list => { const l = list.filter(ok); return l.length ? l[Math.floor(Math.random() * l.length)] : 'meaning'; };
+  if (style === 'meaning') return 'meaning';
+  if (style === 'fits') return ok('fits') ? 'fits' : 'meaning';
+  if (style === 'listen') return any(['listenWord', 'listenSentence']);
+  if (style === 'use') return 'use';
+  // Mixed: a new word starts with its meaning; known words now and then get "Write a sentence".
+  if (isNew(w)) return 'meaning';
+  if (isKnown(w) && session.useCount < 2 && Math.random() < 0.3) return 'use';
+  return any(['meaning', 'fits', 'listenWord', 'listenSentence']);
+}
+
+/** The row for trying the word another way. */
+const switcher = (w, ctxs, cur, label = 'Style') => `<div class="rv-switch" role="group" aria-label="Try this word another way">
+  <small>${label}</small>${KINDS.map(([k, t]) => `<button type="button" class="chip${k === cur ? ' is-on' : ''}" data-kind="${k}" ${canKind(w, ctxs, k) ? '' : 'disabled'} aria-pressed="${k === cur}">${t}</button>`).join('')}</div>`;
 
 const bar = () => {
   const total = session.queue.length;
@@ -370,7 +381,7 @@ async function drawCard(app) {
       <p class="hint tip">Saved to the word’s My notes, and can come back as the sentence in later reviews.</p>`;
     foot = `<button type="button" class="btn" data-rv="skip">Skip</button><button type="button" class="btn btn-accent" data-rv="own">Save sentence</button>`;
   }
-  app.innerHTML = `<main class="page rv-card rv-${type}">${bar()}<div class="rv-body">${body}</div><div class="rv-foot">${foot}</div></main>`;
+  app.innerHTML = `<main class="page rv-card rv-${type}">${bar()}${switcher(w, ctxs, type)}<div class="rv-body">${body}</div><div class="rv-foot">${foot}</div></main>`;
   wire(app, w, type, c);
   if (type === 'listenWord') sayWordSlow(w, false);
   if (type === 'listenSentence') speak(c.text, false);
@@ -386,6 +397,16 @@ function wire(app, w, type, c) {
   const input = main.querySelector('#rv-answer');
   input?.addEventListener('keydown', e => { if (e.key === 'Enter') main.querySelector('[data-rv="check"]')?.click(); });
   main.addEventListener('click', async e => {
+    const kb = e.target.closest('[data-kind]');
+    if (kb && !kb.disabled) {
+      const item = session.queue[session.i];
+      if (item.type === kb.dataset.kind) return;
+      if (canSpeak()) speechSynthesis.cancel();
+      item.type = kb.dataset.kind;
+      item.tried = [...(item.tried || []), type];
+      drawCard(app);
+      return;
+    }
     const b = e.target.closest('[data-rv]');
     if (!b) return;
     const act = b.dataset.rv;
@@ -402,14 +423,14 @@ function wire(app, w, type, c) {
       if (!typed.trim()) { input.focus(); return; }
       drawAnswer(app, w, c, { verdict: judge(typed, w), typed });
     }
-    if (act === 'skip') await answer(app, w, { a: 4, b: 3 });
+    if (act === 'skip') await answer(app, w, { x: 3, y: 1 });
     if (act === 'own') {
       const t = main.querySelector('#rv-own').value.trim();
       if (!t) { main.querySelector('#rv-own').focus(); return; }
       const cur = await db.getWord(w.id);
       await saveWord({ ...cur, own: [...(cur.own || []), t].slice(-10), mine: [cur.mine?.trim(), `• ${t}`].filter(Boolean).join('\n') });
       toast('Sentence saved to My notes');
-      await answer(app, w, { a: 4, b: 2 });
+      await answer(app, w, { x: 2, y: 1 });
     }
   });
   setTimeout(() => input?.focus(), 50);
@@ -422,7 +443,7 @@ function drawAnswer(app, w, c, check) {
   if (canSpeak()) speechSynthesis.cancel();
   const said = c ? c.text.slice(c.start, c.end) : w.word;
   // A typed answer places the dot on the side it earned; you can still move it.
-  const placed = !check ? null : check.verdict === 'right' ? { a: 3, b: 2 } : check.verdict === 'nearly' ? { a: 2, b: 2 } : { a: 0, b: 0 };
+  const placed = !check ? null : check.verdict === 'right' ? { x: 2, y: 1 } : check.verdict === 'nearly' ? { x: 0, y: 0 } : { x: -3, y: 0 };
   let sel = placed;
   const ghost = pointsOf(w).at(-1) || null;
   const banner = !check ? '' : check.verdict === 'right'
@@ -432,9 +453,11 @@ function drawAnswer(app, w, c, check) {
       : `<div class="rv-verdict is-wrong"><b>${check.verdict === 'shown' ? 'The answer' : 'Not quite'} — ${esc(w.word)}</b>${check.typed ? `<small>You wrote “${esc(check.typed)}”</small>` : ''}</div>`;
   const ask = !check ? 'How did it feel? Drag the dot — it snaps to the points'
     : check.verdict === 'right' ? 'Right answer → the dot starts on the remembered side. Move it if it felt hard.'
-      : 'The dot starts at F. Move it if it was nearly there.';
+      : check.verdict === 'nearly' ? 'Nearly → the dot starts in the middle. Move it to where it felt.'
+        : 'The dot starts at F. Move it if it was nearly there — or try the word another way above.';
   app.innerHTML = `<main class="page rv-card rv-answer">${bar()}<div class="rv-body">
     ${banner}
+    ${check && check.verdict !== 'right' ? switcher(w, session.queue[session.i].ctxs || [], null, 'Try another way') : ''}
     <div class="rv-word left"><span><h1>${esc(w.word)}</h1>${w.phonetic ? `<span class="rv-ipa">${esc(w.phonetic)}</span>` : ''}</span>
       <button type="button" class="rv-say" data-rv="say" aria-label="Pronounce">${SPK}</button></div>
     ${w.meanings?.length ? `<div class="wd-dict rv-dict">${groupHtml(w.meanings)}</div>` : ''}
@@ -444,9 +467,7 @@ function drawAnswer(app, w, c, check) {
     ${w.forms?.length ? `<div class="wd-forms"><small>Forms</small>${w.forms.map(f => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}
     <section class="rv-rate">
       <p class="rv-q">${ask}</p>
-      <span class="rv-axis">E · Easy</span>
-      <div class="rv-dia-row"><span class="rv-axis side">F · Forgot</span><div class="rv-dia"></div><span class="rv-axis side right">R · Remembered</span></div>
-      <span class="rv-axis">H · Hard</span>
+      <div class="rv-dia"></div>
     </section>
   </div>
   <div class="rv-foot col">
@@ -459,9 +480,9 @@ function drawAnswer(app, w, c, check) {
   const draw = () => {
     holder.innerHTML = diamondSvg({ ...DIA, sel, ghost, pick: true, label: 'Rate how it felt' });
     if (sel) {
-      const d = daysFor(w, sel.a, sel.b), col = colorOf(sel.a, sel.b);
-      const mine = placed && sel.a === placed.a && sel.b === placed.b && check?.verdict === 'right';
-      readout.innerHTML = `<i style="background:${col}"></i><span>${describe(sel.a, sel.b)}${mine ? ' · placed for you' : ''}</span><b style="color:${col}">${d === 0 ? 'again later today' : d === 1 ? 'next tomorrow' : `next in ${daysLabel(d)}`}</b>`;
+      const d = daysFor(w, sel.x, sel.y), col = colorOf(sel.x, sel.y);
+      const mine = placed && sel.x === placed.x && sel.y === placed.y && check?.verdict === 'right';
+      readout.innerHTML = `<i style="background:${col}"></i><span>${describe(sel.x, sel.y)}${mine ? ' · placed for you' : ''}</span><b style="color:${col}">${d === 0 ? 'again later today' : d === 1 ? 'next tomorrow' : `next in ${daysLabel(d)}`}</b>`;
     } else {
       readout.innerHTML = `<span class="rv-readout-hint">${ghost ? 'The dashed ring is where you put it last time.' : 'Tap or drag inside the diamond.'}</span>`;
     }
@@ -470,6 +491,13 @@ function drawAnswer(app, w, c, check) {
   draw();
   attachPicker(holder, DIA, p => { sel = p; draw(); });
   main.addEventListener('click', async e => {
+    const kb = e.target.closest('[data-kind]');
+    if (kb && !kb.disabled) {
+      const item = session.queue[session.i];
+      item.type = kb.dataset.kind;
+      drawCard(app);
+      return;
+    }
     if (e.target.closest('[data-rv="say"]')) { sayWord(w); return; }
     if (e.target.closest('[data-rv="end"]')) { goBack('#/review'); return; }
     if (e.target.closest('[data-rv="next"]') && sel) {
@@ -482,12 +510,12 @@ function drawAnswer(app, w, c, check) {
 async function answer(app, w, pt) {
   const before = srsOf(w);
   if (!before.reps) session.started++;
-  await rate(w, pt.a, pt.b);
+  await rate(w, pt.x, pt.y);
   session.points.push(pt);
   // Forgotten: once more at the end of this session.
-  if (isLapse(pt.a, pt.b) && !session.again.has(w.id)) {
+  if (isLapse(pt.x, pt.y) && !session.again.has(w.id)) {
     session.again.add(w.id);
-    session.queue.push({ id: w.id, type: 'meaning', ctx: session.queue[session.i].ctx });
+    session.queue.push({ id: w.id, ctx: session.queue[session.i].ctx });
   }
   session.i++;
   window.scrollTo(0, 0);
@@ -496,8 +524,8 @@ async function answer(app, w, pt) {
 
 async function drawDone(app) {
   const pts = session.points;
-  const forgot = pts.filter(p => isLapse(p.a, p.b)).length;
-  const tough = pts.filter(p => !isLapse(p.a, p.b) && inZone(toXY(p.a, p.b).x, toXY(p.a, p.b).y)).length;
+  const forgot = pts.filter(p => isLapse(p.x, p.y)).length;
+  const tough = pts.filter(p => !isLapse(p.x, p.y) && inZone(p.x, p.y)).length;
   const remembered = pts.length - forgot - tough;
   const all = await db.getAllWords();
   const ids = new Set(session.lib.shown.map(w => w.id));
@@ -536,7 +564,7 @@ async function renderProgress(app) {
   const learning = shown.length - known - fresh;
   const since = Date.now() - 30 * DAY;
   const dueLogs = shown.flatMap(w => (srsOf(w).log || []).filter(l => l.t >= since && l.d)).map(logPoint).filter(Boolean);
-  const onTime = dueLogs.length ? Math.round(dueLogs.filter(p => !isLapse(p.a, p.b)).length / dueLogs.length * 100) : null;
+  const onTime = dueLogs.length ? Math.round(dueLogs.filter(p => !isLapse(p.x, p.y)).length / dueLogs.length * 100) : null;
   const today = dayStart(Date.now());
   const days = Array.from({ length: 7 }, (_, i) => {
     const a = today + (i + 1) * DAY, b = a + DAY;

@@ -10,7 +10,7 @@ import * as db from './db.js';
 import { esc, fmtNum, plural, short, I, svg, toast, openSheet, closeOverlay, closeSheet } from './ui.js';
 import { tagColor } from './notes.js';
 import { openDefine } from './dictionary.js';
-import { toXY, logPoint, describe, colorOf, daysLabel, diamondSvg } from './diamond.js';
+import { logPoint, describe, colorOf, daysLabel, diamondSvg } from './diamond.js';
 
 const norm = s => String(s || '').toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ').trim();
 /** A selection cleaned to a word: trims punctuation and a trailing 's. */
@@ -265,7 +265,7 @@ const FORMS_ICON = svg('<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r=
 function progressHtml(w) {
   const log = (w.srs?.log || []).map(l => ({ l, p: logPoint(l) })).filter(x => x.p);
   if (!log.length) return '<p class="hint" style="margin:0">Not reviewed yet. Practise it under Review — each review’s spot on the diamond is kept here.</p>';
-  const score = p => { const { x, y } = toXY(p.a, p.b); return x + y; };
+  const score = p => p.x + p.y;
   const avg = list => list.reduce((s, x) => s + score(x.p), 0) / list.length;
   let trend = ['First review', 'One review so far.', 'var(--text)'];
   if (log.length >= 2) {
@@ -281,8 +281,8 @@ function progressHtml(w) {
   const nextTxt = due <= Date.now() ? 'due now' : left <= 0 ? 'again later today' : `next in ${daysLabel(left)}`;
   const when = t => { const d = new Date(t); return d >= day0 ? 'Today' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); };
   const rows = log.map((x, i) => ({ ...x, i: i + 1 })).reverse().slice(0, 12).map(({ l, p, i }) => `<div class="wp-row">
-      <b>${i}</b><span class="wp-date">${when(l.t)}</span><span class="wp-what">${describe(p.a, p.b)}</span>
-      <span style="color:${colorOf(p.a, p.b)}">${l.n != null ? daysLabel(l.n) : ''}</span></div>`).join('');
+      <b>${i}</b><span class="wp-date">${when(l.t)}</span><span class="wp-what">${describe(p.x, p.y)}</span>
+      <span style="color:${colorOf(p.x, p.y)}">${l.n != null ? daysLabel(l.n) : ''}</span></div>`).join('');
   return `<div class="wp-top"><div class="wp-dia">${diamondSvg({ size: 170, margin: 14, trail: log.slice(-8).map(x => x.p) })}</div>
       <div class="wp-sum"><b style="color:${trend[2]}">${trend[0]}</b><span>${trend[1]}</span><small>${log.length} review${log.length === 1 ? '' : 's'} · ${nextTxt}</small></div></div>
     <div class="wp-list">${rows}</div>

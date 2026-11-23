@@ -202,6 +202,26 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 17.3 — A 7 × 7 grid
+
+- The rating square now has 3 points on each side of the centre lines: 7 × 7 = 49 points,
+  x = forgot −3 … remembered +3, y = hard −3 … easy +3. The two left columns count as forgotten;
+  the far-left column (not easy) comes back later today. Tough zone scaled to match:
+  (−3,0) · (0,0) · (1.5,−1.5) · (1.5,−3) · (−3,−3).
+- Clearer words for each spot ("Barely remembered, a bit hard", "Remembered well, very easy").
+- Earlier reviews move to the matching spot on the bigger grid.
+
+## Update 17.2 — The rating square, practice styles
+
+- The diamond is now a **square** with E on top, R right, H bottom, F left: left → right is
+  forgot → remembered, bottom → top is hard → easy. 25 points (5 × 5). The two left columns
+  count as forgotten. Tough zone: the lower-left area (−2,0) · (0,0) · (1,−1) · (1,−2) · (−2,−2).
+- **Practice style** on the Review page (instead of the card-type switches): Mixed · Meaning ·
+  Fill the gap · Listening · Write a sentence. A word that can't use the style gets a meaning card.
+- **Switch style on any card**: the row under "Vocabulary" (Meaning · Fill the gap · Hear the
+  word · Hear a sentence · Write). After a wrong or nearly-right typed answer, "Try another way"
+  takes you back to the word in another style; you rate it once, at the end.
+
 ## Update 17.1 — Rate on the diamond
 
 - Forgot / Hard / Knew it are replaced by a **diamond**: E (easy) at the top, R (remembered)
@@ -441,7 +461,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v29` → `reader-v30`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v31` → `reader-v32`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

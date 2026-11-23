@@ -26,8 +26,8 @@ async def main():
         page.on('pageerror', lambda e: errs.append(str(e)))
         page.on('console', lambda m: m.type == 'error' and 'Failed to load' not in m.text and errs.append(m.text))
         ev = page.evaluate
-        async def rate(a, b):  # put the dot on a point of the diamond, then Next
-            await page.click(f'[data-pt="{a}-{b}"]'); await page.wait_for_timeout(100)
+        async def rate(x, y):  # put the dot on a point of the square, then Next
+            await page.click(f'[data-pt="{x}_{y}"]'); await page.wait_for_timeout(100)
             await page.click('[data-rv="next"]'); await page.wait_for_timeout(350)
         await page.goto(B + '#/import'); await page.wait_for_selector('.drop-card')
         await page.set_input_files('#file-input', [f'{D}/1984 ch1.txt', f'{D}/1984 ch2.txt'])
@@ -54,27 +54,33 @@ async def main():
         await page.click('[data-rv="show"]'); await page.wait_for_selector('.rv-dia svg')
         assert await page.is_disabled('[data-rv="next"]'), 'Next waits for a dot'
         readouts = {}
-        for pa, pb in [(4, 4), (4, 2), (2, 2), (0, 4), (2, 0), (0, 0)]:
-            await page.click(f'[data-pt="{pa}-{pb}"]'); await page.wait_for_timeout(80)
-            readouts[(pa, pb)] = (await page.inner_text('.rv-readout')).replace('\n', ' ')
+        for px, py in [(3, 3), (3, 0), (2, 1), (0, 0), (0, -3), (-1, 0), (-2, 0), (-3, 3), (-3, 0)]:
+            await page.click(f'[data-pt="{px}_{py}"]'); await page.wait_for_timeout(80)
+            readouts[(px, py)] = (await page.inner_text('.rv-readout')).replace('\n', ' ')
         for k, v in readouts.items(): print('  ', k, v)
-        assert 'Remembered' in readouts[(4, 4)] and '7 days' in readouts[(4, 4)]
-        assert 'Forgot, but it felt easy' in readouts[(2, 0)] and 'next tomorrow' in readouts[(2, 0)]
-        assert readouts[(0, 0)].startswith('Forgot') and 'later today' in readouts[(0, 0)]
+        assert await page.eval_on_selector_all('[data-pt]', 'e => e.length') == 49
+        assert readouts[(3, 3)].startswith('Remembered well, very easy') and '8 days' in readouts[(3, 3)]
+        assert readouts[(2, 1)].startswith('Remembered, fairly easy') and '6 days' in readouts[(2, 1)]
+        assert readouts[(-1, 0)].startswith('Barely remembered') and 'days' in readouts[(-1, 0)]
+        assert readouts[(-2, 0)].startswith('Mostly forgot') and 'next tomorrow' in readouts[(-2, 0)]
+        assert 'Forgot, but it felt easy' in readouts[(-3, 3)] and 'next tomorrow' in readouts[(-3, 3)]
+        assert readouts[(-3, 0)].startswith('Forgot') and 'later today' in readouts[(-3, 0)]
         # dragging: the dot follows the finger and snaps to points
         box = await page.eval_on_selector('.rv-dia svg', 'e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width]; }')
         x0, y0, wd = box
         await page.mouse.move(x0 + wd * 0.5, y0 + wd * 0.5); await page.mouse.down()
         await page.mouse.move(x0 + wd * 0.88, y0 + wd * 0.5, steps=6); await page.mouse.up()
-        dragged = await page.inner_text('.rv-readout'); print('  dragged to the right tip:', dragged.replace('\n', ' '))
+        dragged = await page.inner_text('.rv-readout'); print('  dragged to the right side:', dragged.replace('\n', ' '))
         assert dragged.startswith('Remembered')
-        await page.click('[data-pt="0-0"]')
+        await page.click('[data-pt="-3_0"]')
         await page.screenshot(path=f'{SH}/v17-card-back.png')
         await page.click('[data-rv="next"]'); await page.wait_for_timeout(300)
         print('  after Forgot:', await page.inner_text('.rv-count'))
         assert (await page.inner_text('.rv-count')) == '2 / 4'
         for _ in range(3):
-            await page.click('[data-rv="show"]'); await rate(4, 2)
+            if await page.query_selector('[data-rv="show"]'): await page.click('[data-rv="show"]')
+            else: await page.click('[data-rv="reveal"]')
+            await page.wait_for_selector('.rv-dia svg'); await rate(2, 1)
         done = (await page.inner_text('.rv-done')).replace('\n', ' '); print('  done:', done)
         assert '4 answers' in done and '3 new words started' in done and '3 remembered' in done.replace('\n', ' ').replace('3 remembered', '3 remembered')
         assert await page.query_selector('.rv-done-dia svg')
@@ -86,9 +92,9 @@ async def main():
         # 3 "Which word fits?": one letter off = nearly (Hard suggested); a form counts
         await ev(f"""import('./js/db.js').then(async d => {{ for (const id of {json.dumps(ids)}) {{ const w = await d.getWord(id);
             await d.putWord({{ ...w, srs: {{ reps: 2, interval: 3, ease: 2.5, due: Date.now() - 1000, lapses: 0, streak: 1, log: [] }} }}); }} }})""")
-        await ev("() => { localStorage.setItem('reader-review-types', JSON.stringify({ listenWord: false, listenSentence: false, use: false })); Math.random = () => 0.99; }")
         await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
-        await ev("() => { Math.random = () => 0.99; }")
+        await page.check('input[name="rv-style"][value="fits"]')
+        assert await ev("localStorage.getItem('reader-review-style')") == '"fits"'
         await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-fits')
         print('3 fits card:', (await page.inner_text('.rv-body')).replace('\n', ' | ')[:200])
         await page.screenshot(path=f'{SH}/v17-fits.png')
@@ -99,8 +105,16 @@ async def main():
         if 'starts with “g”' in word: assert 'Nearly' in v and placed.startswith('In the middle')
         else: assert 'Not quite' in v and placed.startswith('Forgot')
         assert not await page.is_disabled('[data-rv="next"]')
+        # not sure? try the word another way: back to a card of another style
+        assert await page.query_selector('.rv-answer .rv-switch')
         await page.screenshot(path=f'{SH}/v17-fits-result.png')
-        await rate(1, 3); await page.wait_for_selector('.rv-fits')
+        await page.click('.rv-answer [data-kind="meaning"]'); await page.wait_for_selector('.rv-meaning')
+        print('  tried another way: meaning card')
+        await page.click('[data-rv="show"]'); await rate(0, -1); await page.wait_for_selector('.rv-fits')
+        # switching style on the front of a card
+        await page.click('[data-kind="meaning"]'); await page.wait_for_selector('.rv-meaning')
+        await page.click('[data-kind="fits"]'); await page.wait_for_selector('.rv-fits')
+        print('  switched fits → meaning → fits on the card front')
         # the next one: type the form the book uses
         mean = await page.inner_text('.rv-mean')
         typed = 'glasses' if 'clear material' in mean else 'towered' if 'rise high' in mean else 'grimy'
@@ -114,7 +128,7 @@ async def main():
         # 4 listening: a sentence from the book, read by the phone's voice
         await ev(f"""import('./js/db.js').then(async d => {{ for (const id of {json.dumps(ids)}) {{ const w = await d.getWord(id);
             await d.putWord({{ ...w, srs: {{ ...w.srs, due: Date.now() - 1000 }} }}); }} }})""")
-        await ev("() => { localStorage.setItem('reader-review-types', JSON.stringify({ use: false })); }")
+        await ev("() => { localStorage.setItem('reader-review-style', JSON.stringify('listen')); }")
         await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
         await ev("() => { Math.random = () => 0.99; window.__said = []; speechSynthesis.speak = u => window.__said.push(u.text); }")
         await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-listenSentence')
@@ -129,9 +143,8 @@ async def main():
         # 5 listening: hear the word (needs a pronunciation)
         await ev(f"""import('./js/db.js').then(async d => {{ for (const id of {json.dumps(ids)}) {{ const w = await d.getWord(id);
             await d.putWord({{ ...w, phonetic: '/x/', srs: {{ ...w.srs, due: Date.now() - 1000 }} }}); }} }})""")
-        await ev("() => { localStorage.setItem('reader-review-types', JSON.stringify({ use: false, listenSentence: false })); }")
         await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
-        await ev("() => { Math.random = () => 0.99; window.__said = []; speechSynthesis.speak = u => window.__said.push(u.text); }")
+        await ev("() => { Math.random = () => 0; window.__said = []; speechSynthesis.speak = u => window.__said.push(u.text); }")
         await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-listenWord')
         said = await ev('window.__said'); print('5 hear the word, spoken:', said)
         assert said and said[0] in ('glass', 'grimy', 'tower')
@@ -143,16 +156,15 @@ async def main():
         # 6 use it in your own sentence (words known well)
         await ev(f"""import('./js/db.js').then(async d => {{ const w = await d.getWord({ids[0]});
             await d.putWord({{ ...w, srs: {{ ...w.srs, interval: 30, due: Date.now() - 1000 }} }}); }})""")
-        await ev("() => { localStorage.setItem('reader-review-types', '{}'); }")
+        await ev("() => { localStorage.setItem('reader-review-style', JSON.stringify('use')); }")
         await page.goto(B + '#/review'); await page.wait_for_selector('.rv-size')
-        await ev("() => { Math.random = () => 0.1; }")
         await page.click('[data-size="7"]'); await page.wait_for_selector('.rv-card')
         if not await page.query_selector('.rv-use'):
             # the known word may not be first; answer until it comes
             for _ in range(4):
                 if await page.query_selector('.rv-use'): break
                 await page.click('[data-rv="show"]') if await page.query_selector('[data-rv="show"]') else await page.click('[data-rv="reveal"]')
-                await rate(4, 2)
+                await rate(2, 1)
         assert await page.query_selector('.rv-use')
         await page.fill('#rv-own', 'The glass of the old window was cold.')
         await page.screenshot(path=f'{SH}/v17-use.png')
@@ -168,7 +180,7 @@ async def main():
         assert 'known well' in grid and '%' in grid
         await page.screenshot(path=f'{SH}/v17-progress.png')
         await ev(f"""import('./js/db.js').then(async d => {{ const w = await d.getWord({ids[1]});
-            const log = [[0, 2], [1, 3], [0, 1]].map(([a, b], i) => ({{ t: Date.now() - (3 - i) * 864e5, a, b, n: 1, d: 1 }}));
+            const log = [[-2, 0], [-1, -1], [0, -2]].map(([x, y], i) => ({{ t: Date.now() - (3 - i) * 864e5, x, y, n: 1, d: 1 }}));
             await d.putWord({{ ...w, srs: {{ ...w.srs, log }} }}); }})""")
         await page.goto(B + '#/review/tough'); await page.wait_for_selector('.rv-tough')
         await page.click('[data-hook]'); await page.fill('.rv-hook-edit textarea', 'grimy = grime: dirt stuck on.')
@@ -179,7 +191,7 @@ async def main():
         assert await page.query_selector('.rv-mini svg')
         # a word whose last 3 dots moved out of the zone leaves the list
         await ev(f"""import('./js/db.js').then(async d => {{ const w = await d.getWord({ids[1]});
-            const log = [...w.srs.log, {{ t: Date.now(), a: 4, b: 2, n: 3, d: 1 }}, {{ t: Date.now(), a: 4, b: 3, n: 5, d: 1 }}, {{ t: Date.now(), a: 3, b: 3, n: 8, d: 1 }}];
+            const log = [...w.srs.log, {{ t: Date.now(), x: 1, y: 1, n: 3, d: 1 }}, {{ t: Date.now(), x: 2, y: 1, n: 5, d: 1 }}, {{ t: Date.now(), x: 1, y: 2, n: 8, d: 1 }}];
             await d.putWord({{ ...w, srs: {{ ...w.srs, log }} }}); }})""")
         await page.goto(B + '#/review'); await page.goto(B + '#/review/tough'); await page.wait_for_selector('.rv-page')
         assert await page.query_selector('.rv-tough') is None
