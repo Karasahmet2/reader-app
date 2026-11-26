@@ -313,6 +313,7 @@ export function setupSelectionBar(textEl, paras, onAction) {
     <button type="button" class="sel-codex" data-sel="codex">${CODEX_SM}<span>Codex</span></button>
     <button type="button" data-sel="highlight" aria-label="Highlight">${I.highlight}<span>Mark</span></button>
     <button type="button" data-sel="find" aria-label="Find uses">${I.searchSm}<span>Find</span></button>
+    <button type="button" data-sel="read" aria-label="Read aloud from here">${svg('<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>', 20)}<span>Read</span></button>
     <button type="button" data-sel="copy" aria-label="Copy">${I.copy}<span>Copy</span></button>`;
   document.body.append(bar);
 

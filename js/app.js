@@ -25,6 +25,7 @@ import * as codex from './codex.js';
 import * as trash from './trash.js';
 import * as words from './words.js';
 import * as review from './review.js';
+import * as readaloud from './readaloud.js';
 
 const app = document.getElementById('app');
 const fileInput = document.getElementById('file-input');
@@ -880,6 +881,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       </div>
       <div class="prev-next">${navBtn(prev, 'Previous', false)}${navBtn(next, 'Next chapter', true)}</div>
       <div class="tools">
+        <button type="button" data-action="read-aloud" aria-label="Listen: read the chapter aloud">${readaloud.LISTEN_ICON}Listen</button>
         <button type="button" data-action="open-settings">${I.text}Text</button>
         <button type="button" data-action="cycle-theme">${I.moon}Theme</button>
         <button type="button" data-action="chapter-notes">${I.notes}Notes</button>
@@ -1171,6 +1173,8 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
       refreshNotes();
     } else if (action === 'find') {
       find.openFind({ term: sel.quote.split('\n')[0], chapterId: id, seriesId: series.id, onJumpHere: jumpToMatch });
+    } else if (action === 'read') {
+      readaloud.listen(sel.sp, sel.so);
     } else if (action === 'copy') {
       try { await navigator.clipboard.writeText(sel.quote); toast('Copied'); } catch { toast('Couldn’t copy'); }
     } else if (action === 'codex') {
@@ -1203,6 +1207,8 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
     }
   });
 
+  // Read aloud: the chapter's sentences; leaving the chapter stops it (unless it carries on).
+  const detachReadAloud = readaloud.attach({ paras, chapterId: id, nextId: next?.id ?? null, onNextChapter: nid => { location.hash = `#/read/${nid}`; } });
   window.addEventListener('scroll', onScroll, { passive: true });
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pagehide', save);
@@ -1213,6 +1219,7 @@ async function renderReader(id, jumpNoteId = null, findJump = null) {
   history.scrollRestoration = 'manual';
   cleanupView = async () => {
     find.hideStepper();
+    detachReadAloud();
     window.removeEventListener('scroll', onScroll);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pagehide', save);
@@ -1776,6 +1783,7 @@ async function renderSettings() {
             <input type="text" data-dict-key="mwLearnersKey" value="${esc(settings.mwLearnersKey || '')}" placeholder="Paste the Learner’s key" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
           <label class="key-field"><span>Collegiate</span>
             <input type="text" data-dict-key="mwCollegiateKey" value="${esc(settings.mwCollegiateKey || '')}" placeholder="Paste the Collegiate key" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <div class="key-test"><button type="button" class="btn" data-action="dict-test">Test keys</button><div id="key-test-result" aria-live="polite"></div></div>
         </div>
         <div class="set-row is-info">
           <span class="txt"><b>Offline dictionary</b>
@@ -1821,6 +1829,28 @@ async function renderSettings() {
     saveSettings(settings);
     toast(input.value.trim() ? 'Key saved' : 'Key removed');
   }));
+  app.querySelector('[data-action="dict-test"]')?.addEventListener('click', async e => {
+    // Save what's typed (even if the box still has focus), then try each key.
+    app.querySelectorAll('[data-dict-key]').forEach(input => { settings = { ...settings, [input.dataset.dictKey]: input.value.trim() }; });
+    saveSettings(settings);
+    const out = app.querySelector('#key-test-result');
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    out.innerHTML = '<small>Testing…</small>';
+    const res = await dictionary.testKeys();
+    btn.disabled = false;
+    const say = v => v === 'ok' ? ['is-ok', 'Works']
+      : v === 'none' ? ['', 'No key']
+        : v === 'key' ? ['is-bad', 'Key not accepted — is it the right dictionary’s key, copied whole and activated?']
+          : v === 'slow' ? ['is-bad', 'No answer in time — try again']
+            : String(v).startsWith('http:') ? ['is-bad', `Merriam-Webster error ${v.slice(5)}`]
+              : v === 'bad' ? ['is-bad', 'Unexpected answer from Merriam-Webster']
+                : ['is-bad', navigator.onLine === false ? 'The phone is offline' : 'Couldn’t reach Merriam-Webster'];
+    out.innerHTML = [['learners', 'Learner’s'], ['collegiate', 'Collegiate']].map(([k, n]) => {
+      const [cls, t] = say(res[k]);
+      return `<p class="key-res ${cls}"><b>${n}:</b> ${t}</p>`;
+    }).join('');
+  });
 }
 
 /* ------------------------------------------------------------------ backup screen */
@@ -1974,6 +2004,9 @@ document.addEventListener('click', e => {
       break;
     case 'open-sounds':
       sounds.openSoundsPanel();
+      break;
+    case 'read-aloud':
+      readaloud.toggleListen(activeReader?.anchor());
       break;
     case 'cycle-theme': {
       // Cycle through your ★ favorite themes (all themes if none are starred).

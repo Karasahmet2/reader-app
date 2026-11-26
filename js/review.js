@@ -12,7 +12,7 @@
 
 import * as db from './db.js';
 import { esc, plural, short, svg, toast, goBack, replaceHash, openSheet, closeOverlay, I } from './ui.js';
-import { allForms, groupHtml, saveWord, sayWord } from './words.js';
+import { allForms, groupHtml, saveWord, sayWord, openWordCard } from './words.js';
 import { isLapse, inZone, logPoint, describe, colorOf, daysLabel, diamondSvg, attachPicker } from './diamond.js';
 
 const DAY = 864e5;
@@ -28,7 +28,7 @@ const KINDS = [
 ];
 const ALL_KINDS = KINDS.map(k => k[0]);
 const kindIcon = (k, size = 22) => svg(KINDS.find(x => x[0] === k)[2], size, 1.8);
-const K_SIZE = 'reader-review-count', K_STYLES = 'reader-review-styles', K_SERIES = 'reader-review-series';
+const K_SIZE = 'reader-review-count', K_STYLES = 'reader-review-styles', K_SERIES = 'reader-review-series', K_SORT = 'reader-review-sort';
 const stylesOn = () => { const v = get(K_STYLES, null); return Array.isArray(v) ? v.filter(k => ALL_KINDS.includes(k)) : [...ALL_KINDS]; };
 
 const norm = s => String(s || '').toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ').trim();
@@ -218,6 +218,7 @@ export async function renderReview(app, sub) {
   }
   if (sub === 'progress') return renderProgress(app);
   if (sub === 'tough') return renderTough(app);
+  if (sub === 'words') return renderWordList(app);
   return renderHome(app);
 }
 
@@ -249,6 +250,7 @@ async function renderHome(app) {
     <section class="rv-sec"><h2 class="rv-label">How many cards?</h2>
       <div class="rv-counts">${SIZES.map(n => `<button type="button" class="rv-count-btn${n === size ? ' is-on' : ''}" data-size="${n}" aria-pressed="${n === size}">${n}</button>`).join('')}</div>
       <p class="hint tip">Due words first, then new ones.</p></section>
+    <a class="btn rv-all" href="#/review/words">All words and their progress · ${shown.length}</a>
     <div class="rv-two">
       <a class="btn" href="#/review/progress">Progress</a>
       <a class="btn" href="#/review/tough">Tough words${tough ? ` · ${tough}` : ''}</a></div>
@@ -291,19 +293,7 @@ async function renderHome(app) {
       location.hash = '#/review/go';
       return;
     }
-    if (e.target.closest('[data-rv="series"]')) {
-      const opts = [['all', 'All series'], ...series.filter(s => lib.words.some(w => lib.inSeries.get(w.id)?.has(s.id))).map(s => [s.id, s.name])];
-      const count = id => (id === 'all' ? lib.words.length : lib.words.filter(w => lib.inSeries.get(w.id)?.has(id)).length);
-      openSheet(`<h2>Review words from</h2><div class="option-list">${opts.map(([id, name]) => `<button type="button" class="option-row${id === pick ? ' is-on' : ''}" data-pick="${id}"><span class="txt">${esc(name)}<small>${plural(count(id), 'word')}</small></span>${id === pick ? I.check : ''}</button>`).join('')}</div>`, sheet => {
-        sheet.addEventListener('click', ev => {
-          const b = ev.target.closest('[data-pick]');
-          if (!b) return;
-          set(K_SERIES, b.dataset.pick === 'all' ? 'all' : Number(b.dataset.pick));
-          closeOverlay();
-          renderHome(app);
-        });
-      });
-    }
+    if (e.target.closest('[data-rv="series"]')) { openSeriesPicker(lib, () => renderHome(app)); return; }
   });
   return null;
 }
@@ -354,6 +344,58 @@ const ctxBox = (c, mid) => `<div class="rv-ctx"><p>${withWord(c, mid)}</p><small
 const hl = c => `<mark class="rv-hl">${esc(c.text.slice(c.start, c.end))}</mark>`;
 const gap = n => `<span class="rv-gap" style="min-width:${Math.max(5, n) * 0.62}em" aria-label="missing word"></span>`;
 
+/* ------------------------------------------------------------------ swipeable rows (Update 18) */
+
+const CHEV_L = svg('<path d="M15 6l-6 6 6 6"/>', 16, 2);
+const CHEV_R = svg('<path d="M9 6l6 6-6 6"/>', 16, 2);
+/** Meanings, one per item. */
+const meaningItems = w => (w.meanings || []).map(m => `<p class="rv-car-text"><b>${esc(m.pos)}</b> ${esc(m.text)}</p>${m.example ? `<em class="rv-car-ex">“${esc(m.example)}”</em>` : ''}`);
+/** A row you swipe (or step with ‹ ›) through: items are html strings. */
+const car = (items, label, name = '') => {
+  if (!items.length) return '';
+  const many = items.length > 1;
+  return `<section class="rv-car" data-car="${name}" data-i="0">
+    <div class="rv-car-head"><span class="rv-label">${label}</span>${many ? `<b class="rv-car-n">1 of ${items.length}</b>` : ''}
+      ${many ? `<span class="rv-car-btns"><button type="button" class="rv-car-btn" data-car-step="-1" aria-label="Previous" disabled>${CHEV_L}</button><button type="button" class="rv-car-btn" data-car-step="1" aria-label="Next">${CHEV_R}</button></span>` : ''}</div>
+    <div class="rv-car-track">${items.map((h, i) => `<div class="rv-car-item"${i ? ' hidden' : ''}>${h}</div>`).join('')}</div>
+    ${many ? `<div class="rv-dots">${items.map((_, i) => `<i${i ? ' class="is-on"' : ''}></i>`).join('')}</div>` : ''}
+  </section>`;
+};
+function stepCar(el, d) {
+  if (!el) return;
+  const items = [...el.querySelectorAll(':scope > .rv-car-track > .rv-car-item')];
+  const cur = Number(el.dataset.i || 0);
+  const i = Math.max(0, Math.min(items.length - 1, cur + d));
+  if (i === cur) return;
+  el.dataset.i = String(i);
+  items.forEach((x, k) => { x.hidden = k !== i; });
+  el.querySelectorAll('.rv-dots i').forEach((x, k) => x.classList.toggle('is-on', k === i));
+  el.querySelector('.rv-car-n').textContent = `${i + 1} of ${items.length}`;
+  el.querySelector('[data-car-step="-1"]').disabled = i === 0;
+  el.querySelector('[data-car-step="1"]').disabled = i === items.length - 1;
+}
+/** Buttons and swipes for every carousel under root. */
+function wireCars(root) {
+  let x0 = null, box = null;
+  root.addEventListener('click', e => {
+    const b = e.target.closest('[data-car-step]');
+    if (b && !b.disabled) stepCar(b.closest('.rv-car'), Number(b.dataset.carStep));
+  });
+  root.addEventListener('pointerdown', e => {
+    const t = e.target.closest('.rv-car-track');
+    if (t) { x0 = e.clientX; box = t.closest('.rv-car'); }
+  });
+  root.addEventListener('pointerup', e => {
+    if (x0 == null || !box) return;
+    const dx = e.clientX - x0, el = box;
+    x0 = null; box = null;
+    if (Math.abs(dx) > 40) stepCar(el, dx < 0 ? 1 : -1);
+  });
+  root.addEventListener('pointercancel', () => { x0 = null; box = null; });
+}
+
+/* ------------------------------------------------------------------ cards */
+
 async function drawCard(app) {
   if (session.i >= session.queue.length) { drawDone(app); return; }
   const item = session.queue[session.i];
@@ -363,25 +405,23 @@ async function drawCard(app) {
   const type = item.type || (item.type = pickType(w, ctxs));
   if (type === 'use') session.useCount++;
   const c = item.ctx || (item.ctx = ctxs.length ? ctxs[Math.floor(Math.random() * ctxs.length)] : null);
+  // The flashcard: the word, its forms, sentences and meanings to swipe, notes, then the square.
+  if (type === 'meaning') { drawAnswer(app, w, c, null); return; }
   const meaning = (w.meanings || [])[0];
 
   let body = '', foot = '';
-  if (type === 'meaning') {
-    body = `<p class="rv-ask">What does it mean?</p>
-      <div class="rv-word"><h1>${esc(w.word)}</h1><button type="button" class="rv-say" data-rv="say" aria-label="Pronounce">${SPK}</button></div>
-      ${c ? ctxBox(c, hl(c)) : ''}
-      <p class="hint tip">Think of the meaning first, then check.</p>`;
-    foot = `<button type="button" class="btn btn-accent" data-rv="show">Show meaning</button>`;
-  } else if (type === 'fits') {
+  if (type === 'fits') {
     const first = c.text.slice(c.start, c.end);
     body = `<p class="rv-ask">Which word fits?</p>
-      <div class="rv-mean"><small>Meaning</small><span>${esc(meaning.pos)} — ${esc(meaning.text)}</span></div>
+      ${player('Play the sentence')}
       <div class="rv-ctx"><p>${withWord(c, gap(first.length))}</p><small>${esc(c.src)} · starts with “${esc(first[0].toLowerCase())}”</small></div>
+      ${car(meaningItems(w), 'Meanings', 'mean')}
       ${answerInput('Your answer')}`;
     foot = `<button type="button" class="btn" data-rv="reveal">Show answer</button><button type="button" class="btn btn-accent" data-rv="check">Check</button>`;
   } else if (type === 'listenWord') {
     body = `<p class="rv-ask big">Which word do you hear?</p>
       ${player('Play the word')}
+      ${car(meaningItems(w), 'Meanings', 'mean')}
       ${answerInput('Type what you hear')}`;
     foot = `<button type="button" class="btn" data-rv="reveal">Show answer</button><button type="button" class="btn btn-accent" data-rv="check">Check</button>`;
   } else if (type === 'listenSentence') {
@@ -400,6 +440,7 @@ async function drawCard(app) {
   }
   app.innerHTML = `<main class="page rv-card rv-${type}">${bar()}${switcher(w, ctxs, type)}<div class="rv-body">${body}</div><div class="rv-foot">${foot}</div></main>`;
   wire(app, w, type, c);
+  wireCars(app.querySelector('.rv-card'));
   if (type === 'listenWord') sayWordSlow(w, false);
   if (type === 'listenSentence') speak(c.text, false);
 }
@@ -433,7 +474,6 @@ function wire(app, w, type, c) {
       const slow = act === 'slow';
       if (type === 'listenWord') sayWordSlow(w, slow); else speak(c.text, slow);
     }
-    if (act === 'show') drawAnswer(app, w, c, null);
     if (act === 'reveal') drawAnswer(app, w, c, { verdict: 'shown', typed: '' });
     if (act === 'check') {
       const typed = input.value;
@@ -455,9 +495,13 @@ function wire(app, w, type, c) {
 
 const DIA = { size: 280, margin: 22 };
 
-/** The answer side: the word card, the sentence, and the diamond. */
+/** The flashcard, and the answer side after a typed answer: the word and its forms, the sentences
+ *  and meanings to swipe through, your notes, then the square. */
 function drawAnswer(app, w, c, check) {
   if (canSpeak()) speechSynthesis.cancel();
+  const item = session.queue[session.i];
+  const ctxs = item.ctxs || [];
+  const sents = c ? [c, ...ctxs.filter(x => x !== c)] : ctxs;
   const said = c ? c.text.slice(c.start, c.end) : w.word;
   // A typed answer places the dot on the side it earned; you can still move it.
   const placed = !check ? null : check.verdict === 'right' ? { x: 2, y: 1 } : check.verdict === 'nearly' ? { x: 0, y: 0 } : { x: -3, y: 0 };
@@ -472,16 +516,19 @@ function drawAnswer(app, w, c, check) {
     : check.verdict === 'right' ? 'Right answer → the dot starts on the remembered side. Move it if it felt hard.'
       : check.verdict === 'nearly' ? 'Nearly → the dot starts in the middle. Move it to where it felt.'
         : 'The dot starts at F. Move it if it was nearly there — or try the word another way above.';
+  const top = !check ? switcher(w, ctxs, 'meaning')
+    : check.verdict !== 'right' ? switcher(w, ctxs, null, 'Try another way') : '';
+  const sentItems = sents.map(x => `<p class="rv-car-text">${withWord(x, hl(x))}</p><small class="rv-car-src">${esc(x.src)}</small>`);
   app.innerHTML = `<main class="page rv-card rv-answer">${bar()}<div class="rv-body">
     ${banner}
-    ${check && check.verdict !== 'right' ? switcher(w, session.queue[session.i].ctxs || [], null, 'Try another way') : ''}
+    ${top}
     <div class="rv-word left"><span><h1>${esc(w.word)}</h1>${w.phonetic ? `<span class="rv-ipa">${esc(w.phonetic)}</span>` : ''}</span>
       <button type="button" class="rv-say" data-rv="say" aria-label="Pronounce">${SPK}</button></div>
-    ${w.meanings?.length ? `<div class="wd-dict rv-dict">${groupHtml(w.meanings)}</div>` : ''}
+    ${w.forms?.length ? `<div class="rv-forms">${w.forms.map(f => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}
+    ${car(sentItems, 'Sentences', 'sent')}
+    ${car(meaningItems(w), 'Meanings', 'mean')}
     ${w.mine?.trim() ? `<div class="rv-box"><span class="rv-label">My notes</span><p>${esc(short(w.mine.trim(), 400))}</p></div>` : ''}
     ${w.hook?.trim() ? `<div class="rv-box is-hook"><span class="rv-label">Memory hook</span><p>${esc(w.hook.trim())}</p></div>` : ''}
-    ${c ? `<p class="rv-line">${withWord(c, hl(c))} <small>${esc(c.src)}</small></p>` : ''}
-    ${w.forms?.length ? `<div class="wd-forms"><small>Forms</small>${w.forms.map(f => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}
     <section class="rv-rate">
       <p class="rv-q">${ask}</p>
       <div class="rv-dia"></div>
@@ -507,6 +554,7 @@ function drawAnswer(app, w, c, check) {
   };
   draw();
   attachPicker(holder, DIA, p => { sel = p; draw(); });
+  wireCars(main);
   main.addEventListener('click', async e => {
     const kb = e.target.closest('[data-kind]');
     if (kb && !kb.disabled) {
@@ -573,6 +621,112 @@ async function drawDone(app) {
     if (!start(fresh, session.size)) return;
     drawCard(app);
   });
+}
+
+/* ------------------------------------------------------------------ the word list (Update 18) */
+
+/** The small trail of the last reviews, in their colours. */
+const trailSvg = pts => {
+  if (!pts.length) return '<span class="rv-vnew">New</span>';
+  const xs = pts.map((_, i) => 6 + i * 16);
+  const w = xs[xs.length - 1] + 6;
+  const line = pts.length > 1 ? `<polyline points="${xs.map(x => `${x},8`).join(' ')}" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"/>` : '';
+  return `<svg class="rv-trail" width="${w}" height="16" viewBox="0 0 ${w} 16" aria-hidden="true">${line}${pts.map((p, i) => `<circle cx="${xs[i]}" cy="8" r="${i === pts.length - 1 ? 5.5 : 4}" fill="${colorOf(p.x, p.y)}"/>`).join('')}</svg>`;
+};
+
+/** The series picker: all series, or one at a time. */
+function openSeriesPicker(lib, onPick) {
+  const { series, pick } = lib;
+  const opts = [['all', 'All series'], ...series.filter(s => lib.words.some(w => lib.inSeries.get(w.id)?.has(s.id))).map(s => [s.id, s.name])];
+  const count = id => (id === 'all' ? lib.words.length : lib.words.filter(w => lib.inSeries.get(w.id)?.has(id)).length);
+  openSheet(`<h2>Words from</h2><div class="option-list">${opts.map(([id, name]) => `<button type="button" class="option-row${id === pick ? ' is-on' : ''}" data-pick="${id}"><span class="txt">${esc(name)}<small>${plural(count(id), 'word')}</small></span>${id === pick ? I.check : ''}</button>`).join('')}</div>`, sheet => {
+    sheet.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-pick]');
+      if (!b) return;
+      set(K_SERIES, b.dataset.pick === 'all' ? 'all' : Number(b.dataset.pick));
+      closeOverlay();
+      onPick();
+    });
+  });
+}
+
+const SORTS = [['az', 'A–Z'], ['first', 'First met'], ['most', 'Most met'], ['tough', 'Tough']];
+
+/** Every saved word, sorted and searchable. With one series picked, where you met each word there
+ *  and its progress beside it. */
+async function renderWordList(app) {
+  const lib = await library();
+  const chapters = new Map((await db.getAllChapters()).map(c => [c.id, c]));
+  let sort = SORTS.some(([k]) => k === get(K_SORT, 'az')) ? get(K_SORT, 'az') : 'az';
+  let query = '';
+  const seriesLabel = lib.pick === 'all' ? 'All series' : lib.series.find(s => s.id === lib.pick)?.name || 'All series';
+  const metOf = w => lib.notes.filter(n => n.wordId === w.id && (lib.pick === 'all' || n.seriesId === lib.pick));
+  const rows = lib.shown.map(w => {
+    const ns = metOf(w);
+    const chaps = [...new Set(ns.map(n => n.chapterId))].map(id => chapters.get(id)).filter(Boolean).sort((a, b) => a.number - b.number);
+    const first = Math.min(w.createdAt || Infinity, ...ns.map(n => n.createdAt || Infinity));
+    return { w, ns, chaps, first, seriesN: new Set(ns.map(n => n.seriesId)).size };
+  });
+  const az = (a, b) => a.w.word.localeCompare(b.w.word, 'en', { sensitivity: 'base' });
+  const cmp = {
+    az,
+    first: (a, b) => (a.first === b.first ? az(a, b) : a.first < b.first ? -1 : 1),
+    most: (a, b) => b.ns.length - a.ns.length || az(a, b),
+    tough: (a, b) => Number(isTough(b.w)) - Number(isTough(a.w)) || az(a, b),
+  };
+  const rowHtml = r => {
+    const w = r.w, m = w.meanings?.[0];
+    const days = Math.round((srsOf(w).due - dayStart(Date.now())) / DAY);
+    const due = isNew(w) ? 'New' : isDue(w) ? 'Due today' : `Next ${daysLabel(days)}`;
+    const where = lib.pick === 'all'
+      ? `<em>${r.seriesN} series · met ${r.ns.length}×</em>`
+      : `<span class="rv-vchips">${r.chaps.map(c => `<i>Ch. ${c.number}</i>`).join('')}${r.ns.length > 1 ? `<i>met ${r.ns.length}×</i>` : ''}</span>`;
+    return `<button type="button" class="rv-vrow" data-wid="${w.id}">
+      <span class="rv-vtxt"><b>${esc(w.word)}</b><small>${m ? `${esc(m.pos)} — ${esc(m.text)}` : 'No meaning saved'}</small>${where}</span>
+      <span class="rv-vprog">${trailSvg(pointsOf(w).slice(-3))}<small class="${isDue(w) ? 'is-due' : ''}">${due}</small></span></button>`;
+  };
+  const due = rows.filter(r => isDue(r.w)).length;
+  const size = SIZES.includes(get(K_SIZE, 7)) ? get(K_SIZE, 7) : 7;
+
+  app.innerHTML = `<main class="page rv-page rv-words">
+    <div class="row-head rv-head"><a class="icon-btn" href="#/review" data-back aria-label="Back">${I.back}</a>
+      <div class="txt"><h1 class="page-title">Words</h1><small>${plural(rows.length, 'word')} · ${due} due today</small></div>
+      <button type="button" class="chip rv-series" data-rv="series">${esc(seriesLabel)} ▾</button></div>
+    ${!rows.length ? `<div class="empty"><strong>No words here yet</strong><span>Select a word while reading → Define → Save.</span></div>` : `
+    <label class="search-box rv-wsearch">${I.search}<input id="rv-q" type="search" placeholder="Search words and forms" autocomplete="off"></label>
+    <div class="rv-sorts" role="group" aria-label="Sort words">${SORTS.map(([k, t]) => `<button type="button" class="chip${k === sort ? ' is-on' : ''}" data-sort="${k}" aria-pressed="${k === sort}">${t}</button>`).join('')}</div>
+    <div class="rv-vlist" id="rv-vlist"></div>
+    <div class="rv-foot col"><button type="button" class="btn btn-accent" data-rv="practice">Practice · ${size} cards</button></div>`}
+  </main>`;
+  const list = app.querySelector('#rv-vlist');
+  const draw = () => {
+    const q = query.trim().toLowerCase();
+    const shown = rows.filter(r => !q || r.w.word.toLowerCase().includes(q) || (r.w.forms || []).some(f => f.toLowerCase().includes(q)))
+      .sort(cmp[sort]);
+    list.innerHTML = shown.length ? shown.map(rowHtml).join('') : '<p class="hint">No word matches that.</p>';
+  };
+  if (list) draw();
+  const page = app.querySelector('.rv-words');
+  page.addEventListener('input', e => { if (e.target.id === 'rv-q') { query = e.target.value; draw(); } });
+  page.addEventListener('click', async e => {
+    const s = e.target.closest('[data-sort]');
+    if (s) {
+      sort = s.dataset.sort;
+      set(K_SORT, sort);
+      page.querySelectorAll('[data-sort]').forEach(b => { b.classList.toggle('is-on', b === s); b.setAttribute('aria-pressed', b === s); });
+      draw();
+      return;
+    }
+    if (e.target.closest('[data-rv="series"]')) { openSeriesPicker(lib, () => renderWordList(app)); return; }
+    if (e.target.closest('[data-rv="practice"]')) {
+      if (!start(lib, size)) { toast('Nothing to practise here yet'); return; }
+      location.hash = '#/review/go';
+      return;
+    }
+    const row = e.target.closest('[data-wid]');
+    if (row) openWordCard(Number(row.dataset.wid), { onChanged: () => renderWordList(app) });
+  });
+  return null;
 }
 
 /* ------------------------------------------------------------------ progress */

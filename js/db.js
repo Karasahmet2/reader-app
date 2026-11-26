@@ -223,6 +223,14 @@ export const getAllSounds = () => withTx(['sounds'], 'readonly', s => req(s.soun
 export const getSound = id => withTx(['sounds'], 'readonly', s => req(s.sounds.get(id)));
 export const addSound = obj => withTx(['sounds'], 'readwrite', s => req(s.sounds.add(obj)));
 export const deleteSound = id => withTx(['sounds'], 'readwrite', s => req(s.sounds.delete(id)));
+/** Change only some fields of a sound (rename). */
+export const updateSound = (id, patch) => withTx(['sounds'], 'readwrite', async s => {
+  const sound = await req(s.sounds.get(id));
+  if (!sound) return null;
+  Object.assign(sound, patch);
+  await req(s.sounds.put(sound));
+  return sound;
+});
 
 // ---------- Chapters ----------
 export const getAllChapters = () => withTx(['chapters'], 'readonly', s => req(s.chapters.getAll()));

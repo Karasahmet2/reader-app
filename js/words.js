@@ -193,9 +193,9 @@ export async function openSaveWord({ note, where, found, onSaved }) {
     const mine = (document.querySelector('#wd-mine')?.value || '').trim();
     let w;
     if (target) {
-      w = mergeInto(target, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword], audio: found.audio, phonetic: found.phonetic });
+      w = mergeInto(target, { forms: [quote, headword, ...(found.forms || [])], meanings: found.meanings, mine, keys: [headword], audio: found.audio, phonetic: found.phonetic });
     } else {
-      w = mergeInto({ word: base, forms: [], meanings: [], keys: [] }, { forms: [quote, headword], meanings: found.meanings, mine, keys: [headword, base], audio: found.audio, phonetic: found.phonetic });
+      w = mergeInto({ word: base, forms: [], meanings: [], keys: [] }, { forms: [quote, headword, ...(found.forms || [])], meanings: found.meanings, mine, keys: [headword, base], audio: found.audio, phonetic: found.phonetic });
     }
     w = await saveWord(w);
     keepAudio(w.audio);
@@ -219,6 +219,7 @@ export async function openSaveWord({ note, where, found, onSaved }) {
     </div>` : `<label class="field"><span class="label" style="padding:0">Word (base form)</span>
       <input class="text-input" id="wd-base" value="${esc(headword)}" autocomplete="off"></label>`}
     ${found.meanings.length ? `<p class="label" style="padding:0;margin:0">Dictionary</p><div class="wd-dict">${groupHtml(found.meanings)}</div>` : ''}
+    ${found.forms?.length ? `<p class="wd-save-forms"><b>Forms saved:</b> ${esc(found.forms.join(', '))}</p>` : ''}
     <label class="field"><span class="label" style="padding:0">My notes <small>(optional)</small></span>
       <textarea class="text-area" id="wd-mine" rows="2" placeholder="Your own words, a memory hook…"></textarea></label>
     ${match ? '' : `<div class="two-btns"><button type="button" class="btn" data-wd="cancel">Cancel</button>
@@ -362,7 +363,8 @@ export async function openWordCard(wordId, { fromNote = null, onChanged, find = 
         saved: w.meanings || [],
         onUpdate: async (meanings, sound = {}) => {
           const cur = await db.getWord(wordId);
-          w = await saveWord({ ...cur, meanings, phonetic: cur.phonetic || sound.phonetic || '', audio: cur.audio || sound.audio || '' });
+          const forms = [...new Set([...(cur.forms || []), ...(sound.forms || [])].map(norm))].filter(f => f && f !== norm(cur.word));
+          w = await saveWord({ ...cur, meanings, forms, phonetic: cur.phonetic || sound.phonetic || '', audio: cur.audio || sound.audio || '' });
           keepAudio(w.audio);
           closeSheet();
           toast('Meanings updated');

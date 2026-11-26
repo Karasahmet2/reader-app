@@ -47,11 +47,11 @@ async def main():
         # 2 a session of new words: meaning cards; Forgot brings a word back
         await page.click('[data-size="7"]'); await page.click('[data-rv="start"]'); await page.wait_for_selector('.rv-card')
         assert await ev('location.hash') == '#/review/go'
-        assert await page.query_selector('.rv-meaning')
-        ctxt = await page.inner_text('.rv-ctx'); print('2 card 1:', ctxt.replace('\n', ' | '))
+        assert await page.query_selector('.rv-answer')   # v18: the flashcard shows everything at once
+        ctxt = await page.inner_text('.rv-car-src'); print('2 card 1:', ctxt.replace('\n', ' | '))
         assert '1984 · Ch. 1' in ctxt
         await page.screenshot(path=f'{SH}/v17-card-front.png')
-        await page.click('[data-rv="show"]'); await page.wait_for_selector('.rv-dia svg')
+        await page.wait_for_selector('.rv-dia svg')
         assert await page.is_disabled('[data-rv="next"]'), 'Next waits for a dot'
         readouts = {}
         for px, py in [(3, 3), (3, 0), (2, 1), (0, 0), (0, -3), (-1, 0), (-2, 0), (-3, 3), (-3, 0)]:
@@ -77,9 +77,11 @@ async def main():
         await page.click('[data-rv="next"]'); await page.wait_for_timeout(300)
         print('  after Forgot:', await page.inner_text('.rv-count'))
         assert (await page.inner_text('.rv-count')) == '2 / 4'
-        for _ in range(3):
-            if await page.query_selector('[data-rv="show"]'): await page.click('[data-rv="show"]')
-            else: await page.click('[data-rv="reveal"]')
+        for _ in range(8):   # a re-queued word can come up as a sentence card: skip that one
+            if await page.query_selector('.rv-done'): break
+            if await page.query_selector('[data-rv="skip"]'):
+                await page.click('[data-rv="skip"]'); await page.wait_for_timeout(300); continue
+            if await page.query_selector('[data-rv="reveal"]'): await page.click('[data-rv="reveal"]')  # flashcards already show the square
             await page.wait_for_selector('.rv-dia svg'); await rate(2, 1)
         done = (await page.inner_text('.rv-done')).replace('\n', ' '); print('  done:', done)
         assert 'Back to reading' not in done
@@ -125,15 +127,15 @@ async def main():
         # not sure? try the word another way: back to a card of another style
         assert await page.query_selector('.rv-answer .rv-switch')
         await page.screenshot(path=f'{SH}/v17-fits-result.png')
-        await page.click('.rv-answer [data-kind="meaning"]'); await page.wait_for_selector('.rv-meaning')
+        await page.click('.rv-answer [data-kind="meaning"]'); await page.wait_for_selector('.rv-answer')
         print('  tried another way: meaning card')
-        await page.click('[data-rv="show"]'); await rate(0, -1); await page.wait_for_selector('.rv-fits')
+        await rate(0, -1); await page.wait_for_selector('.rv-fits')
         # switching style on the front of a card
-        await page.click('[data-kind="meaning"]'); await page.wait_for_selector('.rv-meaning')
+        await page.click('[data-kind="meaning"]'); await page.wait_for_selector('.rv-answer')
         await page.click('[data-kind="fits"]'); await page.wait_for_selector('.rv-fits')
         print('  switched fits → meaning → fits on the card front')
         # the next one: type the form the book uses
-        mean = await page.inner_text('.rv-mean')
+        mean = await page.inner_text('.rv-fits .rv-car[data-car="mean"]')
         typed = 'glasses' if 'clear material' in mean else 'towered' if 'rise high' in mean else 'grimy'
         await page.fill('#rv-answer', typed); await page.click('[data-rv="check"]'); await page.wait_for_selector('.rv-verdict')
         v = await page.inner_text('.rv-verdict'); print('  typed', typed, '→', v.replace('\n', ' | '))
@@ -181,7 +183,7 @@ async def main():
             # the known word may not be first; answer until it comes
             for _ in range(4):
                 if await page.query_selector('.rv-use'): break
-                await page.click('[data-rv="show"]') if await page.query_selector('[data-rv="show"]') else await page.click('[data-rv="reveal"]')
+                if await page.query_selector('[data-rv="reveal"]'): await page.click('[data-rv="reveal"]')  # flashcards already show the square
                 await rate(2, 1)
         assert await page.query_selector('.rv-use')
         await page.fill('#rv-own', 'The glass of the old window was cold.')

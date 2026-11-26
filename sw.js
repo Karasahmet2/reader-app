@@ -10,7 +10,7 @@
 //
 // ► After changing ANY file, bump VERSION (reader-v16, reader-v17, …) so phones update.
 
-const VERSION = 'reader-v33';
+const VERSION = 'reader-v35';
 const APP_FILES = [
   './',
   './index.html',
@@ -30,6 +30,7 @@ const APP_FILES = [
   './js/trash.js',
   './js/words.js',
   './js/review.js',
+  './js/readaloud.js',
   './js/diamond.js',
   './manifest.webmanifest',
   './icons/icon.svg',

@@ -202,6 +202,39 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 19 — Read aloud
+
+- **Listen** in the reader's controls reads the chapter from the sentence on the reading line.
+  The sentence being read is lit, and the page follows it.
+- **Read here** in the selection bar (the word Read) starts at the sentence you touched.
+- **The bar under the top bar**: previous · pause · next · settings · stop. Pause keeps your place.
+- **Settings**: speed (0.7× to 2×), the English voice from the phone, and **Stop after**: end of
+  this chapter, keep going into next chapters, or 15 / 30 / 60 minutes.
+- Uses the phone's own text-to-speech (install voice data in phone Settings → Text-to-speech).
+  Some phones stop speaking when the screen goes off; the reader's Keep screen on setting helps.
+
+## Update 18 — Vocabulary practice as flashcards, your own sounds
+
+- **Words** on the Review page: every saved word, sorted A–Z, First met, Most met or Tough, with a
+  search box. With one series picked, each word shows the chapters it was met in and its trail of
+  the last 3 reviews beside it.
+- **Flashcard** (Meaning): the word with its forms and pronunciation, the sentences and the
+  meanings to swipe through (‹ › or a swipe), your notes, then the square.
+- **Fill the gap** and **Hear the word** have the meanings to swipe through; Fill the gap has a
+  Play button that reads the sentence.
+- **Define → Wiktionary**: the forms are listed with ticks. Ticked forms are saved with the word;
+  untick the ones you don't want. The arrow looks a form up.
+- **Sounds**: only the sounds you add (the built-in ones are gone). **Pause** keeps your place,
+  **Stop** clears it. Rename a sound with the pen. The sleep timer is at the top of the page.
+
+## Update 17.6 — Merriam-Webster problems explained
+
+- Define no longer says "No connection" for every Merriam-Webster failure. A refused key shows
+  **Key problem** (which key, and what to check); a slow or failed connection says so, with
+  **Try again**; a server error shows its number.
+- **Settings → Dictionary → Test keys** tries each key and says: Works · Key not accepted ·
+  Couldn't reach Merriam-Webster · No answer in time.
+
 ## Update 17.5 — Style symbols and card counts
 
 - **Practice styles** are 5 symbols you turn on and off (book = Meaning, dashed box = Fill the
@@ -476,7 +509,7 @@ so your edits show up as soon as you save. Reading, importing and saving all wor
 
 ### Updating the app later
 
-1. Change the files, then bump `VERSION` in `sw.js` (`reader-v33` → `reader-v34`).
+1. Change the files, then bump `VERSION` in `sw.js` (`reader-v34` → `reader-v35`).
 2. VS Code Source Control: write a message → **Commit** → **Sync Changes**.
 3. Next time the phone opens the app online, the update downloads quietly and is used
    the time after. A small message says when it's ready.

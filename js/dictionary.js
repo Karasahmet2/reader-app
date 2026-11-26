@@ -11,7 +11,7 @@
 // Every sheet also has links to open the word on Cambridge, Oxford and Longman.
 
 import * as db from './db.js';
-import { esc, I, svg, plural, toast, openSheet } from './ui.js';
+import { esc, I, svg, plural, toast, openSheet, closeOverlay } from './ui.js';
 import { loadSettings } from './settings.js';
 
 const FREE_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
@@ -75,14 +75,27 @@ function candidates(word) {
   return out.slice(0, 6);
 }
 
+/**
+ * Fetch JSON. Errors say what went wrong (err.kind):
+ *  'net'  the request didn't get through · 'slow' no answer in 12 s
+ *  'http' the site answered with an error (err.code) · 'key' the key was refused · 'bad' not JSON
+ */
 async function getJSON(url) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 9000);
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  const fail = (kind, msg, more = {}) => Object.assign(new Error(msg), { kind, ...more });
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    let res;
+    try {
+      res = await fetch(url, { signal: ctrl.signal });
+    } catch {
+      throw ctrl.signal.aborted ? fail('slow', 'No answer in time') : fail('net', 'Could not connect');
+    }
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`Dictionary error ${res.status}`);
-    return await res.json();
+    const text = await res.text();
+    if (/invalid api key|not subscribed|key is required/i.test(text)) throw fail('key', text.slice(0, 160));
+    if (!res.ok) throw fail('http', `Error ${res.status}`, { code: res.status });
+    try { return JSON.parse(text); } catch { throw fail('bad', text.slice(0, 160)); }
   } finally {
     clearTimeout(timer);
   }
@@ -411,7 +424,8 @@ async function mwLookupIn(word, first) {
   const k = keys();
   const order = (first === 'collegiate' ? ['collegiate', 'learners'] : ['learners', 'collegiate']).filter(r => k[r]);
   let suggestions = [];
-  let offline = false;
+  let offline = false, why = 'net';
+  const badKeys = [];
   const legacy = await db.getDefinition(`mw:${word}`).catch(() => null) || await db.getDefinition(word).catch(() => null);
   for (const ref of order) {
     const swapped = ref !== order[0];
@@ -433,13 +447,44 @@ async function mwLookupIn(word, first) {
       await save(`mw-${ref}`, word, { info: null, suggestions: r?.suggestions || [] });
     } catch (err) {
       console.warn(err);
+      if (err.kind === 'key') { badKeys.push(ref); continue; } // try the other dictionary's key
       offline = true;
+      why = err.kind || 'net';
+      if (err.code) why = `http:${err.code}`;
     }
   }
+  if (badKeys.length && !offline) return { status: 'badkey', refs: badKeys, suggestions };
   if (!offline) return { status: 'none', suggestions };
   const pack = await packLookup(word).catch(() => null);
-  if (pack) return { status: 'ok', info: pack.info, saved: false, fallback: true };
-  return { status: 'offline' };
+  if (pack) return { status: 'ok', info: pack.info, saved: false, fallback: true, why };
+  return { status: 'offline', why, badKeys };
+}
+
+/** Settings → Dictionary → Test keys: try each key with a common word. */
+export async function testKeys() {
+  const k = keys();
+  const out = {};
+  for (const ref of ['learners', 'collegiate']) {
+    if (!k[ref]) { out[ref] = 'none'; continue; }
+    try {
+      const data = await getJSON(`${MW_API}${ref}/json/test?key=${encodeURIComponent(k[ref])}`);
+      out[ref] = Array.isArray(data) ? 'ok' : 'bad';
+    } catch (err) {
+      out[ref] = err.code ? `http:${err.code}` : err.kind || 'net';
+    }
+  }
+  return out;
+}
+
+/** Plain words for why Merriam-Webster didn't answer. */
+export function mwProblem(why) {
+  if (why === 'key') return 'Merriam-Webster didn’t accept the key.';
+  if (why === 'slow') return 'Merriam-Webster took too long to answer. Try again.';
+  if (String(why).startsWith('http:')) return `Merriam-Webster answered with an error (${why.slice(5)}). Try again later.`;
+  if (why === 'bad') return 'Merriam-Webster sent something unexpected. Try again later.';
+  return navigator.onLine === false
+    ? 'This phone is offline.'
+    : 'Couldn’t reach Merriam-Webster, though the phone seems to be online. Try again; if it keeps happening, check the keys in Settings → Dictionary → Test keys.';
 }
 
 export async function lookupIn(src, word, opts = {}) {
@@ -534,7 +579,7 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
       const sub = k === 'mw' ? MW_NAMES[(r?.status === 'ok' && r.ref) || mwRef] : TABS[k][1];
       const n = picksIn(k) + (editing ? saved.filter((m, i) => keep[i] && family(m.src) === k).length : 0);
       b.querySelector('small').textContent = n ? `${n} ticked` : !r ? sub
-        : r.status === 'nokey' ? 'add keys' : r.status === 'none' ? 'not found'
+        : r.status === 'nokey' ? 'add keys' : r.status === 'badkey' ? 'key problem' : r.status === 'none' ? 'not found'
           : r.status === 'offline' ? 'no connection' : r.fallback ? 'offline pack' : sub;
       b.classList.toggle('has-picks', !!n);
     });
@@ -544,6 +589,7 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
 
   /* Ticked meanings (any tab). key → { pos, text, example, src, withEx } */
   let picks = new Map();
+  let formOff = new Set(); // Wiktionary forms you untick are not saved with the word
   const srcOf = () => (tab === 'mw' ? `mw:${(results.mw?.status === 'ok' && results.mw.ref) || mwRef}` : tab);
   const SRC_NAME = { wiki: 'Wiktionary', pack: 'WordNet', 'mw:learners': 'Webster', 'mw:collegiate': 'Webster' };
   const picksIn = t => [...picks.values()].filter(p => (t === 'mw' ? p.src.startsWith('mw') : p.src === t)).length;
@@ -586,6 +632,12 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
 
   const chips = (title, list) => (list?.length ? `<section class="def-part"><h3>${title}</h3>
     <div class="def-syn">${list.map(s => `<button type="button" data-def-word="${esc(s)}">${esc(s)}</button>`).join('')}</div></section>` : '');
+
+  // Forms from Wiktionary, each one ticked to save with the word (all ticked to start).
+  const formsKept = () => (info()?.forms || []).filter(f => !formOff.has(f));
+  const formsPicker = list => (list?.length ? `<section class="def-part"><h3>Forms · tick to save with this word</h3>
+    <div class="def-forms">${list.map(f => { const on = !formOff.has(f); return `<span class="def-form${on ? ' is-on' : ''}"><button type="button" data-form="${esc(f)}" aria-pressed="${on}">${on ? I.checkSm : '<i aria-hidden="true"></i>'}<span>${esc(f)}</span></button><button type="button" class="def-form-look" data-def-word="${esc(f)}" aria-label="Look up ${esc(f)}">${svg('<path d="M7 17L17 7M9 7h8v8"/>', 14, 2)}</button></span>`; }).join('')}</div>
+    <p class="def-tip">Forms you untick aren’t saved. The arrow looks a form up.</p></section>` : '');
 
   const footer = res => {
     const i = res.info;
@@ -659,7 +711,7 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
             }).join('')}</ol>
           </section>`).join('')}
         ${chips('Similar words', i.synonyms)}
-        ${chips('Forms', i.forms)}
+        ${formsPicker(i.forms)}
         <div class="def-actions">
           ${editing ? editBlock(res) : `<button type="button" class="btn btn-accent def-save-btn" data-def="note">${saveLabel()}</button>`}
           <div class="two-btns">
@@ -693,10 +745,22 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
         ${openIn()}`;
       return;
     }
+    if (res.status === 'badkey') {
+      const names = res.refs.map(r => (r === 'learners' ? 'Learner’s' : 'Collegiate')).join(' and ');
+      box.innerHTML = `
+      <div class="def-head"><div class="def-title"><h2>${esc(word)}</h2><span class="def-sub">Key problem</span></div></div>
+      <p class="def-msg">Merriam-Webster didn’t accept your <b>${names}</b> key. Each key works for one dictionary only — check that it’s in the right box in Settings → Dictionary, copied whole, and that the key is activated on dictionaryapi.com.</p>
+      <div class="def-other"><span>Settings → Dictionary → <b>Test keys</b> checks them.</span><button type="button" data-def="settings">Open</button></div>
+      ${otherHint()}
+      ${editing ? editBlock(res) : missingActions}`;
+      return;
+    }
+    const mwWhy = tab === 'mw' && res.why ? mwProblem(res.why) : '';
     box.innerHTML = `
-      <div class="def-head"><div class="def-title"><h2>${esc(word)}</h2><span class="def-sub">No connection</span></div></div>
-      <p class="def-msg">This word hasn’t been looked up in ${TABS[tab][0]} before, so it needs internet once.
+      <div class="def-head"><div class="def-title"><h2>${esc(word)}</h2><span class="def-sub">${tab === 'mw' && res.why && res.why !== 'net' ? 'Couldn’t look it up' : 'No connection'}</span></div></div>
+      <p class="def-msg">${mwWhy || `This word hasn’t been looked up in ${TABS[tab][0]} before, so it needs internet once.`}
         Tip: the <b>Offline</b> tab (Settings → Dictionary → Download) works without internet.</p>
+      <div class="def-other"><span>Connection back?</span><button type="button" data-def="retry">Try again</button></div>
       ${otherHint()}
       ${editing ? editBlock(res) : missingActions}`;
   }
@@ -727,6 +791,7 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
   function showWord(w) {
     word = w;
     picks = new Map();
+    formOff = new Set();
     results = {};
     peek = {};
     mwResults = {};
@@ -787,16 +852,33 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
       sheet.scrollTop = y;
       return;
     }
+    const fm = e.target.closest('[data-form]');
+    if (fm) {
+      const f = fm.dataset.form;
+      if (formOff.has(f)) formOff.delete(f); else formOff.add(f);
+      const y = sheet.scrollTop;
+      render();
+      sheet.scrollTop = y;
+      return;
+    }
     const again = e.target.closest('[data-def-word]');
     if (again) { showWord(cleanWord(again.dataset.defWord)); return; }
     const b = e.target.closest('[data-def]');
     if (!b) return;
     const act = b.dataset.def;
+    if (act === 'retry') {
+      results[tab] = null;
+      if (tab === 'mw') mwResults[mwRef] = null;
+      box.innerHTML = '<p class="def-msg">Looking it up…</p>';
+      load(tab);
+      return;
+    }
+    if (act === 'settings') { closeOverlay({ navTo: '#/settings' }); return; }
     if (act === 'update') {
       const meanings = [...saved.filter((m, i) => keep[i]),
         ...[...picks.values()].map(p => ({ pos: p.pos, text: p.text, example: p.withEx ? p.example : '', src: p.src }))];
       const i = info();
-      onUpdate(meanings, { phonetic: i?.phonetic || '', audio: i?.audio || '' });
+      onUpdate(meanings, { phonetic: i?.phonetic || '', audio: i?.audio || '', forms: formsKept() });
       return;
     }
     if (act === 'note') {
@@ -805,7 +887,7 @@ export function openDefine({ text, onNote, onFind, onCodex, saved = null, onUpda
         ? [...picks.values()].map(p => ({ pos: p.pos, text: p.text, example: p.withEx ? p.example : '', src: p.src }))
         : (i ? i.parts.slice(0, 2).map(([pos, defs]) => ({ pos, text: defs[0].text, example: '', src: srcOf() })) : []);
       onNote(picks.size ? picksText() : i ? noteText(i) : '', {
-        headword: i?.word || word, meanings, audio: i?.audio || '', phonetic: i?.phonetic || '', text: picks.size ? picksText() : i ? noteText(i) : '',
+        headword: i?.word || word, meanings, audio: i?.audio || '', phonetic: i?.phonetic || '', forms: formsKept(), text: picks.size ? picksText() : i ? noteText(i) : '',
       });
     }
     else if (act === 'clear') { picks.clear(); render(); }
