@@ -7,7 +7,8 @@
 // third), then the words due soonest, so it always fills up.
 //
 // Card types: What does it mean? · Which word fits? · Listen: hear the word · Listen: a
-// sentence from your book · Use it in your own sentence (words you know well, now and then).
+// sentence from your book · Hear and write a sentence (type the sentence you hear) · Use it in
+// your own sentence (words you know well, now and then).
 // The schedule lives on the word, so it's in backups and the Trash with it.
 
 import * as db from './db.js';
@@ -24,6 +25,7 @@ const KINDS = [
   ['fits', 'Fill the gap', '<path d="M3 12h3.5M17.5 12H21"/><rect x="8.5" y="8" width="7" height="8" rx="1.5" stroke-dasharray="2.2 2"/>'],
   ['listenWord', 'Hear the word', '<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>'],
   ['listenSentence', 'Hear a sentence', '<path d="M3 9.5v5h3l4 3v-11l-4 3z"/><path d="M14 8.5h7M14 12h7M14 15.5h4.5"/>'],
+  ['dictate', 'Hear and write a sentence', '<path d="M3 9.5v5h3l4 3v-11l-4 3z"/><path d="M14.5 17.5l5.5-5.5 2 2-5.5 5.5h-2z"/>'],
   ['use', 'Write a sentence', '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>'],
 ];
 const ALL_KINDS = KINDS.map(k => k[0]);
@@ -186,6 +188,20 @@ export function judge(input, w) {
   return 'wrong';
 }
 
+/** Hear and write: 'right' when the words match (any order, case and punctuation ignored),
+ *  'nearly' when most of them do, else 'wrong'. */
+export function sentenceVerdict(input, said) {
+  const words = t => norm(t).replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(' ').filter(Boolean);
+  const want = words(said), got = words(input);
+  if (!got.length || !want.length) return 'wrong';
+  const pool = new Map();
+  for (const x of want) pool.set(x, (pool.get(x) || 0) + 1);
+  let hit = 0;
+  for (const x of got) { const n = pool.get(x); if (n) { hit++; pool.set(x, n - 1); } }
+  const score = hit / Math.max(want.length, got.length);
+  return score >= 0.99 ? 'right' : score >= 0.8 ? 'nearly' : 'wrong';
+}
+
 /* ------------------------------------------------------------------ speaking */
 
 function speak(text, slow) {
@@ -318,7 +334,7 @@ function canKind(w, ctxs, k) {
   if (k === 'meaning' || k === 'use') return true;
   if (k === 'fits') return !!(ctxs.length && w.meanings?.length);
   if (k === 'listenWord') return !!((w.audio || w.phonetic) && (w.audio || canSpeak()));
-  if (k === 'listenSentence') return !!(ctxs.length && canSpeak());
+  if (k === 'listenSentence' || k === 'dictate') return !!(ctxs.length && canSpeak());
   return false;
 }
 function pickType(w, ctxs) {
@@ -431,6 +447,11 @@ async function drawCard(app) {
       <div class="rv-ctx"><small>${esc(c.src)}</small><p>${withWord(c, gap(first.length))}</p></div>
       ${answerInput('The word you heard')}`;
     foot = `<button type="button" class="btn" data-rv="reveal">Show answer</button><button type="button" class="btn btn-accent" data-rv="check">Check</button>`;
+  } else if (type === 'dictate') {
+    body = `<p class="rv-ask big">Write the sentence you hear</p>
+      ${player('Play the sentence')}
+      <label class="rv-own"><span class="rv-label">Your sentence</span><textarea class="text-area" rows="3" id="rv-answer" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="Type the whole sentence"></textarea></label>`;
+    foot = `<button type="button" class="btn" data-rv="reveal">Show answer</button><button type="button" class="btn btn-accent" data-rv="check">Check</button>`;
   } else { // use
     body = `<p class="rv-ask">Use it in your own sentence</p>
       <div class="rv-word col"><h1>${esc(w.word)}</h1>${meaning ? `<small>${esc(meaning.pos)} — ${esc(meaning.text)}</small>` : ''}</div>
@@ -442,7 +463,7 @@ async function drawCard(app) {
   wire(app, w, type, c);
   wireCars(app.querySelector('.rv-card'));
   if (type === 'listenWord') sayWordSlow(w, false);
-  if (type === 'listenSentence') speak(c.text, false);
+  if (type === 'listenSentence' || type === 'dictate') speak(c.text, false);
 }
 
 const answerInput = ph => `<input class="rv-input" id="rv-answer" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${ph}">`;
@@ -453,7 +474,7 @@ const player = label => `<div class="rv-player">
 function wire(app, w, type, c) {
   const main = app.querySelector('.rv-card');
   const input = main.querySelector('#rv-answer');
-  input?.addEventListener('keydown', e => { if (e.key === 'Enter') main.querySelector('[data-rv="check"]')?.click(); });
+  if (input?.tagName === 'INPUT') input.addEventListener('keydown', e => { if (e.key === 'Enter') main.querySelector('[data-rv="check"]')?.click(); });
   main.addEventListener('click', async e => {
     const kb = e.target.closest('[data-kind]');
     if (kb && !kb.disabled) {
@@ -474,11 +495,13 @@ function wire(app, w, type, c) {
       const slow = act === 'slow';
       if (type === 'listenWord') sayWordSlow(w, slow); else speak(c.text, slow);
     }
-    if (act === 'reveal') drawAnswer(app, w, c, { verdict: 'shown', typed: '' });
+    if (act === 'reveal') drawAnswer(app, w, c, { verdict: 'shown', typed: '', dictate: type === 'dictate' });
     if (act === 'check') {
       const typed = input.value;
       if (!typed.trim()) { input.focus(); return; }
-      drawAnswer(app, w, c, { verdict: judge(typed, w), typed });
+      const dictate = type === 'dictate';
+      const verdict = dictate ? sentenceVerdict(typed, c.text.slice(c.start, c.end)) : judge(typed, w);
+      drawAnswer(app, w, c, { verdict, typed, dictate });
     }
     if (act === 'skip') await answer(app, w, { x: 3, y: 1 });
     if (act === 'own') {
@@ -507,7 +530,11 @@ function drawAnswer(app, w, c, check) {
   const placed = !check ? null : check.verdict === 'right' ? { x: 2, y: 1 } : check.verdict === 'nearly' ? { x: 0, y: 0 } : { x: -3, y: 0 };
   let sel = placed;
   const ghost = pointsOf(w).at(-1) || null;
-  const banner = !check ? '' : check.verdict === 'right'
+  const banner = !check ? '' : check.dictate
+    ? (check.verdict === 'right' ? `<div class="rv-verdict is-right"><b>Right — the whole sentence</b></div>`
+      : check.verdict === 'nearly' ? `<div class="rv-verdict is-nearly"><b>Nearly — check the words</b><small>You wrote “${esc(check.typed)}”</small></div>`
+        : `<div class="rv-verdict is-wrong"><b>${check.verdict === 'shown' ? 'The sentence' : 'Not quite'}</b>${check.typed ? `<small>You wrote “${esc(check.typed)}”</small>` : ''}</div>`)
+    : check.verdict === 'right'
     ? `<div class="rv-verdict is-right"><b>Right — ${esc(w.word)}</b>${norm(said) !== norm(w.word) ? `<small>The book says “${esc(said)}”; other forms of the word count too.</small>` : ''}</div>`
     : check.verdict === 'nearly'
       ? `<div class="rv-verdict is-nearly"><b>Nearly — check the spelling</b><small>You wrote “${esc(check.typed)}” · it’s “${esc(w.word)}”</small></div>`

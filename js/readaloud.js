@@ -14,6 +14,7 @@ import { esc, svg, toast, openSheet } from './ui.js';
 
 const K_VOICE = 'reader-ra-voice', K_RATE = 'reader-ra-rate', K_STOP = 'reader-ra-stop';
 const RATES = [0.7, 1, 1.25, 1.5, 2];
+const STEP = 0.05, RATE_MIN = 0.5, RATE_MAX = 2.5;   // the bar's − / + change speed by 5%
 const STOPS = [['chapter', 'End of this chapter'], ['next', 'Keep going into next chapters'], ['15', '15 min'], ['30', '30 min'], ['60', '60 min']];
 const HANDOVER_MS = 6000; // a chapter change counts as "keep going" only this soon after the last sentence
 
@@ -25,6 +26,7 @@ const NEXT = svg('<path d="M18 5v14M5 6l9 6-9 6z"/>', 20);
 const STOP = svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>', 18);
 const GEAR = svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', 20);
 const CHECK = svg('<path d="M5 12l5 5 9-10"/>', 16, 2.2);
+const fmtRate = r => `${Number(r.toFixed(2))}×`;
 
 const get = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
@@ -95,7 +97,8 @@ function lightCurrent() {
   if (window.CSS?.highlights && window.Highlight) CSS.highlights.set('ra-lit', new Highlight(r));
   else s.p.classList.add('ra-lit-p');
   const rect = r.getBoundingClientRect();
-  const top = 170, bottom = window.innerHeight - 170;   // clear of the bar at the top
+  const barBottom = st.bar && !st.bar.hidden ? st.bar.getBoundingClientRect().bottom : 128;
+  const top = barBottom + 16, bottom = window.innerHeight - 170;   // clear of the bar at the top
   if (rect.top < top || rect.bottom > bottom) {
     window.scrollTo({ top: Math.max(0, window.scrollY + rect.top - window.innerHeight * 0.38), behavior: 'smooth' });
   }
@@ -185,6 +188,15 @@ export function togglePause() {
   }
 }
 
+/** Faster or slower by 5%. A sentence being read starts again at the new speed. */
+function changeRate(d) {
+  const cur = get(K_RATE, 1);
+  const next = Math.round(Math.min(RATE_MAX, Math.max(RATE_MIN, cur + d)) * 100) / 100;
+  put(K_RATE, next);
+  if (st.on && !st.paused) { st.token++; speechSynthesis.cancel(); speakAt(st.i); }
+  drawBar();
+}
+
 function jump(d) {
   if (!st.on) return;
   const i = Math.max(0, Math.min(st.list.length - 1, st.i + d));
@@ -243,6 +255,8 @@ function ensureBar() {
     if (a === 'prev') jump(-1);
     else if (a === 'next') jump(1);
     else if (a === 'pause') togglePause();
+    else if (a === 'slower') changeRate(-STEP);
+    else if (a === 'faster') changeRate(STEP);
     else if (a === 'stop') stop();
     else if (a === 'settings') openSettings();
   });
@@ -255,13 +269,18 @@ function drawBar() {
   const el = ensureBar();
   el.hidden = !st.on;
   if (!st.on) return;
-  el.innerHTML = `<div class="ra-info"><b>${st.paused ? 'Paused — keeps your place' : 'Reading aloud'}</b>
+  const rate = get(K_RATE, 1);
+  el.innerHTML = `<div class="ra-row"><div class="ra-info"><b>${st.paused ? 'Paused — keeps your place' : 'Reading aloud'}</b>
       <small>sentence ${st.i + 1} of ${st.list.length}</small></div>
     <button type="button" class="ra-btn" data-ra="prev" aria-label="Previous sentence">${PREV}</button>
     <button type="button" class="ra-btn ra-main" data-ra="pause" aria-label="${st.paused ? 'Resume' : 'Pause'}">${st.paused ? PLAY : PAUSE}</button>
     <button type="button" class="ra-btn" data-ra="next" aria-label="Next sentence">${NEXT}</button>
     <button type="button" class="ra-btn" data-ra="settings" aria-label="Read-aloud settings">${GEAR}</button>
-    <button type="button" class="ra-btn" data-ra="stop" aria-label="Stop reading">${STOP}</button>`;
+    <button type="button" class="ra-btn" data-ra="stop" aria-label="Stop reading">${STOP}</button></div>
+    <div class="ra-row ra-speedrow"><span class="ra-speed-l">Speed</span>
+      <button type="button" class="ra-step" data-ra="slower" aria-label="Slower, 5% less">−</button>
+      <b class="ra-speed-v" aria-live="polite">${fmtRate(rate)}</b>
+      <button type="button" class="ra-step" data-ra="faster" aria-label="Faster, 5% more">+</button></div>`;
 }
 
 /* ------------------------------------------------------------------ settings */

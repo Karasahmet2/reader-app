@@ -13,7 +13,7 @@ SPEECH = """(() => {
     getVoices: () => [{ name: 'English (US) test', lang: 'en-US', voiceURI: 'test-us' }],
     cancel() { log.cancelled++; this._cur = null; },
     pause() {}, resume() {},
-    speak(u) { this._cur = u; log.spoken.push(u.text); setTimeout(() => { if (this._cur === u) { this._cur = null; u.onend && u.onend({}); } }, 1000); },
+    speak(u) { this._cur = u; log.spoken.push(u.text); log.rate = u.rate; setTimeout(() => { if (this._cur === u) { this._cur = null; u.onend && u.onend({}); } }, 1000); },
   };
   Object.defineProperty(window, 'speechSynthesis', { value: ss, configurable: true });
 })();"""
@@ -79,6 +79,15 @@ async def main():
         rate = await ev("localStorage.getItem('reader-ra-rate')"); stop_after = await ev("localStorage.getItem('reader-ra-stop')")
         print('5 settings saved: rate', rate, 'stop', stop_after); assert rate == '1.5' and stop_after == '"15"'
         await page.screenshot(path=f'{SH}/v19-settings.png')
+        # 6 the bar's speed buttons change by 5% and the sentence being read restarts at the new speed
+        await page.click('[data-ra="faster"]'); await page.wait_for_timeout(200)
+        v = (await page.inner_text('.ra-speed-v')).strip(); print('6 faster:', v)
+        assert v == '1.55×', v
+        assert await ev('window.__ra.rate') == 1.55
+        await page.click('[data-ra="slower"]'); await page.click('[data-ra="slower"]'); await page.wait_for_timeout(200)
+        v = (await page.inner_text('.ra-speed-v')).strip(); print('  slower twice:', v); assert v == '1.45×', v
+        assert await ev("localStorage.getItem('reader-ra-rate')") == '1.45'
+        await page.click('[data-ra="stop"]')
         print('errors:', errs)
         await b.close()
 

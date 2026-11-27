@@ -103,7 +103,7 @@ async def main():
             await d.putWord({{ ...w, srs: {{ reps: 2, interval: 3, ease: 2.5, due: Date.now() - 1000, lapses: 0, streak: 1, log: [] }} }}); }} }})""")
         await page.goto(B + '#/review'); await page.wait_for_selector('.rv-counts')
         # styles are symbols you turn on and off; Start is off when none is on
-        for k in ['meaning', 'fits', 'listenWord', 'listenSentence', 'use']:
+        for k in ['meaning', 'fits', 'listenWord', 'listenSentence', 'dictate', 'use']:
             await page.click(f'[data-style="{k}"]')
         off = await page.inner_text('.rv-kinds-on'); print('3 all styles off:', off.replace('\n', ' '), '| start disabled:', await page.is_disabled('[data-rv="start"]'))
         assert await page.is_disabled('[data-rv="start"]') and 'All styles are off' in off

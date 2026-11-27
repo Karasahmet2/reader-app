@@ -202,6 +202,16 @@ Offline dictionary data: Open English WordNet 2024 (https://en-word.net), CC BY 
 - **Export the structure** to reuse it for another book or give it to an agent to improve.
   **Remove this Codex** deletes the structure and its entries.
 
+## Update 19.1 — Hear and write, and 5% speed steps
+
+- **Hear and write a sentence** (Review practice): the sentence from your book is read aloud and you
+  type the whole sentence. Right when every word matches (case and punctuation don't matter, word
+  order does not have to be exact); nearly when most words match; then the usual meaning card and
+  the square. Turn it on or off with the other practice symbols.
+- **Read aloud speed**: the bar has a Speed row with − and + that change the speed by 5% at a time
+  (e.g. 1× → 1.05×). A sentence being read starts again at the new speed. The Settings chips still
+  set the speed in steps.
+
 ## Update 19 — Read aloud
 
 - **Listen** in the reader's controls reads the chapter from the sentence on the reading line.
